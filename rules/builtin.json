@@ -1,0 +1,12 @@
+[
+  {
+    "id": "builtin.rename_request_method.v1",
+    "pattern": ".send_request(",
+    "replacement": ".request(",
+    "reason": "target client consolidated request method names",
+    "created_by": "human",
+    "success_count": 0,
+    "failure_count": 0,
+    "metadata": {"scope": "demo"}
+  }
+]
