@@ -1,83 +1,154 @@
 # Agentic Migrator
 
-A self-improving code migration pipeline that combines **deterministic transformation rules**, **test-driven validation**, and an **LLM rule synthesizer**.
+> **A test-driven, self-improving code migration system that turns successful LLM repairs into reusable deterministic rules.**
 
-Instead of asking an LLM to rewrite an entire codebase in one shot, Agentic Migrator uses a bounded repair loop:
+Agentic Migrator is a public reference architecture for modernizing code without handing an entire repository to an LLM and hoping for the best.
 
-1. apply known migration rules;
-2. convert the source;
-3. run validation scenarios;
-4. classify failures;
-5. ask an LLM wrapper for a *minimal reusable rule* only when deterministic rules are insufficient;
-6. persist successful rules into the rule store;
-7. retry the conversion;
-8. optionally propose a test-harness repair when the same infrastructure-style failure repeats.
+The system combines:
 
-The important idea is that successful fixes become **memory**. Future conversions can apply the learned rule automatically before invoking the LLM again.
+- deterministic migration rules;
+- test-driven validation;
+- structured failure classification;
+- a bounded LLM repair loop;
+- persistent rule memory;
+- guarded test-harness repair;
+- migration observability and benchmark metrics;
+- auditable human-in-the-loop controls.
 
-## Architecture
+The public examples are intentionally synthetic so the repository demonstrates the architecture without exposing proprietary source code, migration rules or internal test suites.
+
+---
+
+## The core idea
+
+A naive migration agent often looks like this:
+
+```text
+legacy code → giant LLM prompt → rewritten code → hope
+```
+
+Agentic Migrator instead treats the LLM as an **exception handler and rule synthesizer**.
 
 ```mermaid
 flowchart TD
-    A[Source code] --> B[Rule engine]
-    R[(Rule store\nJSON/YAML)] --> B
-    B --> C[Migration adapter]
-    C --> D[Candidate output]
-    D --> E[Test runner]
-    E --> F{Tests pass?}
+    SRC[Legacy source] --> RULES[Deterministic rule engine]
+    MEMORY[(Persistent rule memory)] --> RULES
+    RULES --> ADAPTER[Migration adapter]
+    ADAPTER --> CANDIDATE[Candidate output]
+    CANDIDATE --> TESTS[Test runner]
+    TESTS --> PASS{Validation passes?}
 
-    F -- yes --> G[Accept migration]
-    G --> H[Persist metrics + trace]
+    PASS -- yes --> ACCEPT[Accept migration]
+    ACCEPT --> METRICS[Metrics + trace + audit]
 
-    F -- no --> I[Failure classifier]
-    I --> J{Known repair?}
-    J -- yes --> B
-    J -- no --> K[LLM rule synthesizer]
-    K --> L[Candidate reusable rule]
-    L --> M[Rule validator]
-    M --> N{Rule improves result?}
-    N -- yes --> O[Persist learned rule]
-    O --> B
-    N -- no --> P[Rollback / retry budget]
+    PASS -- no --> CLASSIFY[Failure classifier]
+    CLASSIFY --> KNOWN{Known reusable repair?}
+    KNOWN -- yes --> RULES
+    KNOWN -- no --> LLM[LLM rule synthesizer]
+    LLM --> PROPOSAL[Structured candidate rule]
+    PROPOSAL --> VALIDATE[Rule validation + regression check]
+    VALIDATE --> BETTER{Improves outcome?}
+    BETTER -- yes --> LEARN[Persist learned rule]
+    LEARN --> MEMORY
+    BETTER -- no --> BUDGET[Rollback / retry budget]
 
-    I --> Q{Repeated test-harness failure?}
-    Q -- yes --> S[LLM test-repair proposal]
-    S --> T[Guardrails + audit diff]
-    T --> U{Allowed?}
-    U -- yes --> E
-    U -- no --> P
+    CLASSIFY --> REPEATED{Repeated harness failure?}
+    REPEATED -- yes --> TESTFIX[LLM test-repair proposal]
+    TESTFIX --> GUARD[Test guardrails + diff]
+    GUARD --> ALLOWED{Safe modification?}
+    ALLOWED -- yes --> TESTS
+    ALLOWED -- no --> BUDGET
 ```
+
+A successful fix becomes **memory**. The next migration can apply it before another LLM call is needed.
+
+---
 
 ## Why not pure LLM rewriting?
 
-Whole-program rewriting is difficult to reproduce and hard to debug. This design treats the LLM as an **exception handler / rule synthesizer**, not the default execution path.
+Whole-program rewriting is difficult to reproduce, expensive to validate and hard to debug.
 
-That gives the system:
+This design gives the migration process:
 
 - deterministic first-pass behavior;
-- lower LLM usage;
-- reusable learned rules;
+- lower dependence on LLM calls;
+- reusable learned transformations;
 - explicit failure traces;
-- regression tests;
-- auditable rule history;
 - bounded retries;
-- a separation between code repair and test-harness repair.
+- regression validation;
+- auditable rule provenance;
+- a strict boundary between source repair and test repair.
 
-## Core concepts
+The system is deliberately opinionated: **the agent is allowed to learn, but not to quietly redefine success.**
 
-### Hard rules
+---
 
-Hand-written rules cover known migration patterns such as renamed APIs, import changes, deprecated argument names or syntax rewrites.
+## Migration lifecycle
 
-### Learned rules
+```mermaid
+sequenceDiagram
+    participant U as Migration request
+    participant E as Engine
+    participant R as Rule store
+    participant T as Tests
+    participant L as LLM wrapper
+    participant A as Audit / metrics
 
-If conversion fails and no known rule applies, the LLM wrapper receives a compact failure packet containing the source fragment, generated fragment, failing test information and active rule IDs. It returns a structured rule proposal rather than arbitrary free-form code.
+    U->>E: source + validation scenarios
+    E->>R: load built-in + learned rules
+    R-->>E: ordered rule set
+    E->>E: transform source
+    E->>T: execute candidate
+    T-->>E: structured result
 
-A rule is persisted only after it improves the failing scenario and passes regression validation.
+    alt tests pass
+        E->>A: record success + rules used
+        E-->>U: migrated source
+    else tests fail
+        E->>E: classify failure
+        E->>L: compact failure packet
+        L-->>E: structured reusable rule
+        E->>T: validate rule candidate
+        alt candidate improves result
+            E->>R: persist learned rule
+            E->>E: retry migration
+        else candidate regresses
+            E->>A: record rejected proposal
+        end
+    end
+```
 
-### Rule memory
+---
 
-Learned rules are stored with provenance:
+## Hard rules
+
+Hand-written rules cover known migration patterns such as:
+
+- renamed APIs;
+- deprecated keyword arguments;
+- import-path changes;
+- syntax rewrites;
+- configuration-key migrations;
+- wrapper replacement patterns.
+
+Hard rules are cheap, deterministic and easy to regression-test.
+
+---
+
+## Learned rules
+
+When deterministic rules are insufficient, the LLM wrapper receives a compact failure packet containing:
+
+- source fragment;
+- generated fragment;
+- failing scenario;
+- failure classification;
+- stderr / assertion context;
+- currently active rule IDs.
+
+The wrapper returns a **structured rule proposal** instead of unrestricted free-form code.
+
+Example rule memory:
 
 ```json
 {
@@ -91,55 +162,170 @@ Learned rules are stored with provenance:
 }
 ```
 
-### Guarded test repair
+A proposed rule is persisted only if it improves the failing scenario and survives the configured regression validation.
 
-Sometimes the migrated program is valid but the test harness itself is stale: an import path changed, fixture format changed, or the same environment/setup error repeats.
+---
 
-The agent may propose a test repair only after a configurable repeated-failure threshold. Test changes are treated differently from migration rules:
+## Guarded test repair
+
+Sometimes the migrated program is valid but the test harness is stale: an import path changed, fixture layout moved or environment setup no longer matches the target runtime.
+
+The agent may propose a test repair only after a configurable repeated-failure threshold.
+
+Test modifications are held to a stricter policy than source transformations:
 
 - original tests remain versioned;
 - assertion deletion is rejected by default;
 - broad exception swallowing is rejected;
 - expected values cannot silently be weakened;
-- every accepted test modification is recorded with a diff and reason.
+- accepted modifications retain a unified diff;
+- the migration trace records why the harness changed.
 
-This avoids the classic agent failure mode of "fixing" a migration by making the tests easier.
+This prevents the classic autonomous-agent failure mode of **"fixing" the migration by making the tests easier**.
+
+---
+
+## Migration observability
+
+The repository includes `migrator/metrics.py`, which projects detailed migration traces into portfolio- and CI-friendly metrics.
+
+Tracked metrics include:
+
+| Metric | Why it matters |
+|---|---|
+| Pass rate | Overall migration convergence |
+| First-pass success | Effectiveness of deterministic memory |
+| LLM avoidance rate | How often the system succeeds without repair calls |
+| Learned-rule reuse | Whether successful repairs actually become reusable knowledge |
+| Average attempts | Convergence efficiency |
+| Rule usage | Which migration knowledge provides value |
+| Failure-kind distribution | Where migration effort is being spent |
+| Test-repair rate | How often stale harnesses are involved |
+| Regression failures | Whether candidate rules damage existing scenarios |
+
+The synthetic benchmark can be run with:
+
+```bash
+python examples/benchmark_report.py
+```
+
+It writes machine-readable JSON and a Markdown summary under `artifacts/`.
+
+> Benchmark records shipped with the public example are synthetic demonstrations of the metric pipeline, not claimed production performance.
+
+---
+
+## Failure model
+
+The engine distinguishes failure classes rather than treating every exception as the same prompt:
+
+```mermaid
+flowchart LR
+    F[Failure] --> S[Syntax]
+    F --> I[Import]
+    F --> R[Runtime]
+    F --> A[Assertion]
+    F --> H[Test harness]
+    F --> U[Unknown]
+
+    S --> P[Repair priority]
+    I --> P
+    R --> P
+    A --> P
+    H --> T[Test-repair policy]
+    U --> B[Bounded fallback]
+```
+
+A later, more local failure can represent progress. For example, moving from an import error to a specific assertion failure often means the migration has advanced far enough to execute the target behavior.
+
+---
 
 ## Repository layout
 
 ```text
 agentic-migrator/
 ├── migrator/
-│   ├── engine.py
-│   ├── models.py
-│   ├── rules.py
-│   ├── failures.py
-│   ├── llm.py
-│   └── test_guard.py
+│   ├── engine.py          # bounded migration loop
+│   ├── models.py          # structured domain objects
+│   ├── rules.py           # rule store + deterministic transforms
+│   ├── failures.py        # failure classification
+│   ├── llm.py             # structured synthesizer interface
+│   ├── metrics.py         # migration observability
+│   └── test_guard.py      # guarded harness repair
 ├── rules/
 │   └── builtin.json
 ├── examples/
-│   └── python_api_migration.py
+│   ├── python_api_migration.py
+│   └── benchmark_report.py
 ├── tests/
 │   └── test_engine.py
+├── .github/workflows/
+│   └── ci.yml
+├── requirements-dev.txt
 └── README.md
 ```
 
-## Portfolio keywords, earned rather than sprinkled
+---
 
-- agentic AI
-- code transformation
-- test-driven migration
-- self-improving rule systems
-- LLM tool use
-- structured outputs
-- failure classification
-- persistent agent memory
-- bounded autonomous loops
-- regression testing
-- audit logging
-- human-in-the-loop controls
+## Engineering decisions
+
+### LLM calls are deliberately late
+
+The system tries reusable deterministic knowledge first. This reduces cost, nondeterminism and prompt sensitivity.
+
+### The rule store is an explicit memory boundary
+
+Agent memory is not hidden in conversation history. Successful transformations are versionable artifacts with IDs and provenance.
+
+### Repair loops are bounded
+
+`max_attempts` prevents non-converging autonomous loops from consuming unlimited time or tokens.
+
+### Test repair is a separate authority domain
+
+Changing implementation and changing validation are not equivalent operations. The guard layer makes that distinction explicit.
+
+### Observability is part of the architecture
+
+If a migration system learns new rules, it should also make it possible to answer:
+
+- Which rules are being reused?
+- Which migrations still need the LLM?
+- Where does the process fail?
+- Did a learned rule improve future conversions?
+- Are test repairs becoming suspiciously common?
+
+---
+
+## Example interview walkthrough
+
+A concise way to explain the project:
+
+> I built a migration loop where deterministic rules handle known transformations first. The converted candidate is validated against scenarios. If it fails, the failure is classified and an LLM is asked for a minimal reusable rule rather than a full rewrite. Candidate rules are regression-tested before they enter a persistent rule store, so successful fixes become deterministic behavior on future migrations. Repeated harness failures can trigger a separate guarded test-repair path, and the entire process is bounded and observable.
+
+That description maps directly to concrete code in this repository.
+
+---
+
+## What this demonstrates
+
+- agentic AI;
+- code transformation;
+- test-driven migration;
+- self-improving rule systems;
+- LLM tool use;
+- structured outputs;
+- persistent agent memory;
+- bounded autonomous loops;
+- regression testing;
+- audit logging;
+- human-in-the-loop controls;
+- migration observability;
+- failure classification;
+- safe automation design.
+
+---
 
 ## Status
 
-The public version uses toy migration examples and synthetic test scenarios. It is designed to demonstrate the architecture without exposing proprietary source code, migration rules or internal test suites.
+The project is an actively developed public reference implementation. Current examples focus on small Python API migrations and synthetic validation scenarios; the architecture is intentionally structured so additional language adapters, AST transforms, containerized test runners and repository-scale orchestration can be added without changing the core control loop.
