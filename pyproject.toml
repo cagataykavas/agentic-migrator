@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-migrator"
+version = "0.2.0"
+description = "Test-driven, rule-learning code migration platform with guarded LLM repair loops"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "Cagatay Kavas"}]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+agentic-migrator = "migrator.cli:main"
+
+[tool.setuptools]
+packages = ["migrator"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
