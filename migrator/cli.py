@@ -6,7 +6,10 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .ast_rules import AttributeRewrite, ImportRewrite, KeywordRewrite, transform_source
+from .cost import CostLedger
 from .project_scan import build_inventory, migration_plan, plan_as_markdown
+from .repository import GitRepository
+from .semantic_diff import compare_public_api
 
 
 def _write_or_print(text: str, output: str | None) -> None:
@@ -72,6 +75,37 @@ def command_transform(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_semantic_diff(args: argparse.Namespace) -> int:
+    before = Path(args.before).read_text(encoding="utf-8")
+    after = Path(args.after).read_text(encoding="utf-8")
+    diff = compare_public_api(before, after)
+    text = json.dumps(diff.as_dict(), indent=2)
+    _write_or_print(text, args.output)
+    return 2 if diff.breaking and args.fail_on_breaking else 0
+
+
+def command_git_checkpoint(args: argparse.Namespace) -> int:
+    repository = GitRepository(args.root)
+    checkpoint = repository.checkpoint()
+    print(json.dumps(asdict(checkpoint), indent=2))
+    if args.require_clean and checkpoint.dirty:
+        return 2
+    return 0
+
+
+def command_git_patch(args: argparse.Namespace) -> int:
+    repository = GitRepository(args.root)
+    path = repository.write_patch(args.output, base=args.base)
+    print(path)
+    return 0
+
+
+def command_cost_summary(args: argparse.Namespace) -> int:
+    ledger = CostLedger(args.ledger)
+    print(json.dumps(ledger.summary(), indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agentic-migrator",
@@ -108,6 +142,31 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FUNCTION:OLD=NEW",
     )
     transform.set_defaults(handler=command_transform)
+
+    semantic = subparsers.add_parser(
+        "semantic-diff",
+        help="compare public Python API signatures before and after migration",
+    )
+    semantic.add_argument("before")
+    semantic.add_argument("after")
+    semantic.add_argument("--output")
+    semantic.add_argument("--fail-on-breaking", action="store_true")
+    semantic.set_defaults(handler=command_semantic_diff)
+
+    checkpoint = subparsers.add_parser("git-checkpoint", help="show the current Git migration checkpoint")
+    checkpoint.add_argument("root", nargs="?", default=".")
+    checkpoint.add_argument("--require-clean", action="store_true")
+    checkpoint.set_defaults(handler=command_git_checkpoint)
+
+    patch = subparsers.add_parser("git-patch", help="export the current repository diff as a patch artifact")
+    patch.add_argument("root", nargs="?", default=".")
+    patch.add_argument("--base", default="HEAD")
+    patch.add_argument("--output", default="artifacts/migration.patch")
+    patch.set_defaults(handler=command_git_patch)
+
+    cost = subparsers.add_parser("cost-summary", help="summarize optional LLM token/cost usage")
+    cost.add_argument("--ledger", default="artifacts/llm_usage.jsonl")
+    cost.set_defaults(handler=command_cost_summary)
     return parser
 
 
