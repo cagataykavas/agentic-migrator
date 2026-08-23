@@ -6,7 +6,9 @@ This page is a compact visual companion to the main README.
 
 ```mermaid
 flowchart TB
-    REPO[Repository] --> SCAN[Project scanner]
+    REPO[Repository] --> GIT[Clean Git checkpoint]
+    GIT --> WT[Detached isolated worktree]
+    WT --> SCAN[Project scanner]
     SCAN --> AST[AST parse + import inventory]
     AST --> GRAPH[Local dependency graph]
     GRAPH --> PLAN[Risk-aware migration plan]
@@ -18,10 +20,13 @@ flowchart TB
     TEXT --> CAND
 
     CAND --> TEST[Test scenarios]
+    CAND --> SEM[Public API semantic diff]
     TEST --> OK{Pass?}
+    SEM --> OK
     OK -- yes --> TRACE[Trace + metrics]
     OK -- no --> CLASS[Failure classifier]
     CLASS --> SYNTH[LLM rule synthesizer]
+    SYNTH --> COST[Token / cost ledger]
     SYNTH --> QUAR[Quarantined learned rule]
     QUAR --> VALID[Validation + regressions]
     VALID --> GOV{Rule governor}
@@ -29,6 +34,11 @@ flowchart TB
     GOV -- promote --> MEMORY[(Promoted rule memory)]
     GOV -- disable --> OFF[Disabled]
     MEMORY --> STRUCT
+
+    TRACE --> PATCH[Patch artifact]
+    PATCH --> APPROVE{Human / CI approval}
+    APPROVE -- reject --> DROP[Discard worktree]
+    APPROVE -- accept --> APPLY[Explicit patch apply]
 ```
 
 ## 2. Learned-rule lifecycle
@@ -57,12 +67,16 @@ flowchart LR
     AGG --> FAIL[Failure distribution]
     AGG --> REG[Regression failures]
     AGG --> TEST[Test-repair rate]
+    COST[LLM usage ledger] --> TOK[Input/output tokens]
+    COST --> USD[Estimated cost]
     PASS --> REPORT[CI / benchmark report]
     LLM --> REPORT
     REUSE --> REPORT
     FAIL --> REPORT
     REG --> REPORT
     TEST --> REPORT
+    TOK --> REPORT
+    USD --> REPORT
 ```
 
 ## 4. Why AST rules matter
@@ -102,19 +116,76 @@ PYTHONPATH=. python examples/repository_migration_plan.py . \
   --output artifacts/migration_plan.md
 ```
 
-## 6. Portfolio dashboard
+## 6. Git isolation and patch approval
 
-A static UI prototype is included at [`migration_dashboard.html`](migration_dashboard.html). It visualizes the kinds of signals the control plane would expose: convergence, deterministic reuse, LLM avoidance, rule promotion and failing migration units.
+`migrator/repository.py` now provides a real Git safety boundary:
 
-## 7. What I would build next
+- refuses to start an isolated migration from a dirty checkout;
+- records the current commit/branch checkpoint;
+- creates a **detached temporary worktree** for migration attempts;
+- deletes the temporary worktree after the attempt;
+- exports binary-safe patch artifacts;
+- can validate/apply patches explicitly;
+- keeps destructive hard reset behind an explicit `allow_destructive=True` flag.
 
-- containerized test runners with CPU/memory/time budgets;
-- git worktree isolation per migration attempt;
-- language adapters beyond Python;
-- semantic-diff scoring;
-- patch-level human approval;
-- OpenTelemetry traces;
+The source checkout therefore does not need to be the experimental workspace.
+
+Useful commands:
+
+```bash
+agentic-migrator git-checkpoint . --require-clean
+agentic-migrator git-patch . --base HEAD --output artifacts/migration.patch
+```
+
+## 7. Semantic migration guard
+
+Passing tests does not prove that a public API stayed compatible. `migrator/semantic_diff.py` adds an AST-based public API surface check for Python modules.
+
+It detects:
+
+- added public functions/classes;
+- removed public functions/classes;
+- changed function argument signatures;
+- changed public method surfaces on classes.
+
+```bash
+agentic-migrator semantic-diff before.py after.py --fail-on-breaking
+```
+
+This is intentionally a **guardrail**, not a claim that static API comparison proves behavioral equivalence. It complements tests and scenario validation.
+
+## 8. LLM cost / token accounting
+
+`migrator/cost.py` provides a provider-agnostic append-only JSONL ledger for optional LLM repair calls. A pricing record defines input/output price per million tokens; every rule-synthesis or test-repair call can record:
+
+- model;
+- operation;
+- input/output token counts;
+- calculated USD cost;
+- migration metadata;
+- timestamp.
+
+```bash
+agentic-migrator cost-summary --ledger artifacts/llm_usage.jsonl
+```
+
+This makes **LLM avoidance** measurable not only as a percentage but eventually as latency/cost avoided by deterministic and learned-rule reuse.
+
+## 9. Portfolio dashboard
+
+A static UI prototype is included at [`migration_dashboard.html`](migration_dashboard.html). It visualizes the kinds of signals the control plane exposes: convergence, deterministic reuse, LLM avoidance, rule promotion and failing migration units.
+
+## 10. What I would build next
+
+Already implemented from the old roadmap: containerized bounded test runner, Git worktree isolation, semantic public-API diff and token/cost accounting.
+
+Next high-value extensions:
+
+- Java and TypeScript language adapters;
+- OpenTelemetry traces across migration attempts;
+- patch-level web approval workflow;
 - rule-store persistence in PostgreSQL/object storage;
 - distributed worker queue for repository-scale batches;
 - canary migration campaigns and automatic rollback;
-- cost/token accounting per migration family.
+- dependency/version compatibility resolver;
+- semantic equivalence probes using generated differential tests.
