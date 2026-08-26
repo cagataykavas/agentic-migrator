@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -127,7 +127,6 @@ def build_inventory(root: str | Path) -> ProjectInventory:
             else:
                 candidate = imported
 
-            # Match the most specific local module prefix.
             matches = [
                 (module_name, path)
                 for module_name, path in module_to_path.items()
