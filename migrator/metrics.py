@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from statistics import mean
-from typing import Iterable
 
 from .models import MigrationTrace
 
@@ -47,7 +47,7 @@ class MigrationRunRecord:
         llm_rule_requests: int = 0,
         llm_test_requests: int = 0,
         regression_failures: int = 0,
-    ) -> "MigrationRunRecord":
+    ) -> MigrationRunRecord:
         failure_kinds = tuple(
             str(item.get("kind", "unknown"))
             for item in trace.failures
