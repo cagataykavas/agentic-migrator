@@ -26,8 +26,14 @@ class ProposedChange:
         return asdict(self)
 
 
-class MigrationWorkspace:
-    """In-memory repository change set with hashes, diffs, and rollback support."""
+class ChangeSet:
+    """In-memory repository change plan with hashes, diffs, and rollback support.
+
+    ``ChangeSet`` is intentionally separate from ``workspace.MigrationWorkspace``.
+    This class prepares and reviews a proposed create/update/delete plan without
+    touching disk. The filesystem workspace is the transactional layer that can
+    snapshot, apply, verify, and roll back an approved plan.
+    """
 
     def __init__(self, files: Mapping[str, str]) -> None:
         normalized = {self._normalize_path(path): content for path, content in files.items()}
@@ -56,7 +62,7 @@ class MigrationWorkspace:
         return destination
 
     @classmethod
-    def from_directory(cls, root: str | Path, pattern: str = "*.py") -> MigrationWorkspace:
+    def from_directory(cls, root: str | Path, pattern: str = "*.py") -> ChangeSet:
         root_path = Path(root).resolve()
         files = {
             path.relative_to(root_path).as_posix(): path.read_text(encoding="utf-8")
@@ -177,3 +183,7 @@ class MigrationWorkspace:
             destination = self._destination(root_path, path)
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(content, encoding="utf-8")
+
+
+# Backward-compatible import for older examples; new code should prefer ChangeSet.
+MigrationWorkspace = ChangeSet
