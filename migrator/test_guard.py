@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import difflib
 
-
 FORBIDDEN_PATTERNS = (
     "assert True",
     "except Exception: pass",
@@ -23,5 +22,17 @@ def validate_test_repair(original: str, proposed: str) -> tuple[bool, str]:
     return True, "ok"
 
 
-def unified_diff(original: str, proposed: str, fromfile: str = "tests/original.py", tofile: str = "tests/proposed.py") -> str:
-    return "".join(difflib.unified_diff(original.splitlines(True), proposed.splitlines(True), fromfile=fromfile, tofile=tofile))
+def unified_diff(
+    original: str,
+    proposed: str,
+    fromfile: str = "tests/original.py",
+    tofile: str = "tests/proposed.py",
+) -> str:
+    return "".join(
+        difflib.unified_diff(
+            original.splitlines(True),
+            proposed.splitlines(True),
+            fromfile=fromfile,
+            tofile=tofile,
+        )
+    )
