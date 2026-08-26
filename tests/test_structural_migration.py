@@ -11,6 +11,7 @@ from migrator.project_scan import build_inventory, migration_plan
 
 def test_ast_rule_rewrites_code_but_not_strings():
     source = (
+        "# keep legacy_client wording in comments\n"
         "import legacy_client\n"
         "message = 'legacy_client.request(timeout_seconds=5)'\n"
         "result = legacy_client.request(timeout_seconds=5)\n"
@@ -19,14 +20,13 @@ def test_ast_rule_rewrites_code_but_not_strings():
         source,
         import_rewrites=(ImportRewrite("legacy_client", "modern_client"),),
         keyword_rewrites=(
-            KeywordRewrite("legacy_client.request", "timeout_seconds", "timeout"),
+            KeywordRewrite("modern_client.request", "timeout_seconds", "timeout"),
         ),
     )
+    assert "# keep legacy_client wording in comments" in output
     assert "import modern_client" in output
     assert "'legacy_client.request(timeout_seconds=5)'" in output
-    # Function still uses legacy_client because import rewriting does not silently
-    # rename every Name node; this demonstrates conservative rule boundaries.
-    assert "legacy_client.request(timeout=5)" in output
+    assert "modern_client.request(timeout=5)" in output
     assert applied
 
 
