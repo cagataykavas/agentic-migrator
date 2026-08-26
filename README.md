@@ -1,223 +1,219 @@
 # Agentic Migrator
 
-> **A test-driven, self-improving code migration system that turns successful LLM repairs into reusable deterministic rules.**
+> **A test-driven, self-improving code-migration system that turns successful LLM repairs into reusable deterministic rules.**
 
-Agentic Migrator is a public reference architecture for modernizing code without handing an entire repository to an LLM and hoping for the best.
+Agentic Migrator is a public reference architecture for modernizing code without handing an entire repository to an LLM and hoping for the best. It treats the LLM as a **bounded exception handler and rule synthesizer**, while deterministic transformations, isolated validation, rollback boundaries and governance remain explicit software components.
 
-The system combines:
+All examples are synthetic. No proprietary source code, migration rules or internal test suites are included.
 
-- deterministic migration rules;
-- test-driven validation;
-- structured failure classification;
-- a bounded LLM repair loop;
-- persistent rule memory;
-- guarded test-harness repair;
-- migration observability and benchmark metrics;
-- auditable human-in-the-loop controls.
-
-The public examples are intentionally synthetic so the repository demonstrates the architecture without exposing proprietary source code, migration rules or internal test suites.
-
----
-
-## The core idea
-
-A naive migration agent often looks like this:
-
-```text
-legacy code → giant LLM prompt → rewritten code → hope
-```
-
-Agentic Migrator instead treats the LLM as an **exception handler and rule synthesizer**.
+## Architecture
 
 ```mermaid
 flowchart TD
-    SRC[Legacy source] --> RULES[Deterministic rule engine]
-    MEMORY[(Persistent rule memory)] --> RULES
-    RULES --> ADAPTER[Migration adapter]
-    ADAPTER --> CANDIDATE[Candidate output]
-    CANDIDATE --> TESTS[Test runner]
-    TESTS --> PASS{Validation passes?}
+    REPO[Repository] --> SCAN[Dependency + risk scan]
+    SCAN --> WT[Detached Git worktree]
+    WT --> RULES[Deterministic rule engine]
+    MEMORY[(Governed rule memory)] --> RULES
+    RULES --> EDIT[Source-preserving structural edits]
+    EDIT --> DIFF[ChangeSet + semantic API diff]
+    DIFF --> TEST[Bounded sandbox validation]
+    TEST --> PASS{Tests pass?}
 
-    PASS -- yes --> ACCEPT[Accept migration]
-    ACCEPT --> METRICS[Metrics + trace + audit]
+    PASS -- yes --> ACCEPT[Approved migration artifact]
+    ACCEPT --> MANIFEST[SHA-256 manifest + patch + metrics]
 
-    PASS -- no --> CLASSIFY[Failure classifier]
-    CLASSIFY --> KNOWN{Known reusable repair?}
-    KNOWN -- yes --> RULES
-    KNOWN -- no --> LLM[LLM rule synthesizer]
-    LLM --> PROPOSAL[Structured candidate rule]
-    PROPOSAL --> VALIDATE[Rule validation + regression check]
-    VALIDATE --> BETTER{Improves outcome?}
-    BETTER -- yes --> LEARN[Persist learned rule]
-    LEARN --> MEMORY
-    BETTER -- no --> BUDGET[Rollback / retry budget]
+    PASS -- no --> CLASSIFY[Failure classification]
+    CLASSIFY --> LLM[Structured LLM repair proposal]
+    BUDGET[Call / token / cost budget] --> LLM
+    LLM --> REGRESS[Candidate + regression validation]
+    REGRESS --> GOOD{Improves outcome?}
+    GOOD -- yes --> GOV[Quarantine / canary / promotion]
+    GOV --> MEMORY
+    GOOD -- no --> ROLLBACK[Rollback / retry budget]
 
-    CLASSIFY --> REPEATED{Repeated harness failure?}
-    REPEATED -- yes --> TESTFIX[LLM test-repair proposal]
-    TESTFIX --> GUARD[Test guardrails + diff]
-    GUARD --> ALLOWED{Safe modification?}
-    ALLOWED -- yes --> TESTS
-    ALLOWED -- no --> BUDGET
+    CLASSIFY --> HARNESS{Repeated harness failure?}
+    HARNESS -- yes --> TESTFIX[Guarded test-repair proposal]
+    TESTFIX --> TEST
 ```
 
-A successful fix becomes **memory**. The next migration can apply it before another LLM call is needed.
+The core principle is simple:
 
----
-
-## Why not pure LLM rewriting?
-
-Whole-program rewriting is difficult to reproduce, expensive to validate and hard to debug.
-
-This design gives the migration process:
-
-- deterministic first-pass behavior;
-- lower dependence on LLM calls;
-- reusable learned transformations;
-- explicit failure traces;
-- bounded retries;
-- regression validation;
-- auditable rule provenance;
-- a strict boundary between source repair and test repair.
-
-The system is deliberately opinionated: **the agent is allowed to learn, but not to quietly redefine success.**
-
----
-
-## Migration lifecycle
-
-```mermaid
-sequenceDiagram
-    participant U as Migration request
-    participant E as Engine
-    participant R as Rule store
-    participant T as Tests
-    participant L as LLM wrapper
-    participant A as Audit / metrics
-
-    U->>E: source + validation scenarios
-    E->>R: load built-in + learned rules
-    R-->>E: ordered rule set
-    E->>E: transform source
-    E->>T: execute candidate
-    T-->>E: structured result
-
-    alt tests pass
-        E->>A: record success + rules used
-        E-->>U: migrated source
-    else tests fail
-        E->>E: classify failure
-        E->>L: compact failure packet
-        L-->>E: structured reusable rule
-        E->>T: validate rule candidate
-        alt candidate improves result
-            E->>R: persist learned rule
-            E->>E: retry migration
-        else candidate regresses
-            E->>A: record rejected proposal
-        end
-    end
+```text
+legacy repository
+  → inspect dependency/risk structure
+  → isolate work
+  → deterministic migration first
+  → validate
+  → ask the LLM only for unresolved failures
+  → promote reusable repairs only after evidence
 ```
 
----
+## What is implemented
 
-## Hard rules
+### 1. Dependency-aware repository planning
 
-Hand-written rules cover known migration patterns such as:
+`migrator/project_scan.py` parses Python files, builds local dependency relationships, identifies dependency cycles and produces an ordered migration plan with explicit risk reasons. The CLI exposes it directly:
 
-- renamed APIs;
-- deprecated keyword arguments;
-- import-path changes;
-- syntax rewrites;
-- configuration-key migrations;
-- wrapper replacement patterns.
-
-Hard rules are cheap, deterministic and easy to regression-test.
-
----
-
-## Learned rules
-
-When deterministic rules are insufficient, the LLM wrapper receives a compact failure packet containing:
-
-- source fragment;
-- generated fragment;
-- failing scenario;
-- failure classification;
-- stderr / assertion context;
-- currently active rule IDs.
-
-The wrapper returns a **structured rule proposal** instead of unrestricted free-form code.
-
-Example rule memory:
-
-```json
-{
-  "id": "learned.rename_timeout_kwarg.v1",
-  "pattern": "timeout_seconds=",
-  "replacement": "timeout=",
-  "reason": "target API renamed keyword argument",
-  "created_by": "llm",
-  "success_count": 4,
-  "failure_count": 0
-}
+```bash
+agentic-migrator scan . --format markdown --output artifacts/migration-plan.md
 ```
 
-A proposed rule is persisted only if it improves the failing scenario and survives the configured regression validation.
+This makes repository-scale migration an ordering/problem-decomposition task rather than a directory-wide rewrite.
 
----
+### 2. Source-preserving structural migration
 
-## Guarded test repair
+`migrator/ast_rules.py` uses the Python AST to identify semantic nodes, but deliberately **does not serialize the whole program with `ast.unparse()`**.
 
-Sometimes the migrated program is valid but the test harness is stale: an import path changed, fixture layout moved or environment setup no longer matches the target runtime.
+Instead it applies byte-range edits back onto the original UTF-8 source. That means deterministic migrations can change imports, bound module names, keyword arguments and attribute chains while preserving unrelated:
 
-The agent may propose a test repair only after a configurable repeated-failure threshold.
+- comments;
+- string literals;
+- whitespace and formatting;
+- source text outside the targeted syntax node.
 
-Test modifications are held to a stricter policy than source transformations:
+For example, an API migration can change:
 
-- original tests remain versioned;
-- assertion deletion is rejected by default;
-- broad exception swallowing is rejected;
-- expected values cannot silently be weakened;
-- accepted modifications retain a unified diff;
-- the migration trace records why the harness changed.
+```python
+# legacy_client is intentionally mentioned in this comment
+import legacy_client
+result = legacy_client.request(timeout_seconds=5)
+```
 
-This prevents the classic autonomous-agent failure mode of **"fixing" the migration by making the tests easier**.
+into code using `modern_client.request(timeout=5)` without rewriting the comment merely because it contains the old identifier.
 
----
+The structural transformer is covered by regression tests that explicitly require comments and strings to survive.
 
-## Migration observability
+### 3. Deterministic rules + governed learned rules
 
-The repository includes `migrator/metrics.py`, which projects detailed migration traces into portfolio- and CI-friendly metrics.
+Known transformations are cheap deterministic rules. When those rules do not resolve a failure, the LLM interface receives a compact failure packet and proposes a **structured reusable rule**, not an unrestricted whole-program rewrite.
 
-Tracked metrics include:
+Successful proposals do not immediately become globally trusted. `migrator/governance.py` models a rule lifecycle:
+
+```text
+quarantined → canary → promoted
+               ↓
+            disabled
+```
+
+Promotion uses validation success, cross-migration reuse, success rate and regression evidence. A previously promoted rule can be quarantined again if regression evidence appears.
+
+### 4. Bounded sandbox validation
+
+`migrator/sandbox.py` provides a bounded local subprocess boundary for migration validation:
+
+- no shell invocation;
+- executable allowlist;
+- stripped environment with explicit allowlisted overrides;
+- absolute/parent-path rejection for materialized files;
+- temporary working directory;
+- execution timeout;
+- captured-output byte limit.
+
+`migrator/runners.py` adapts this boundary to the migration engine through `PytestSandboxRunner`. Candidate code and its active test harness are materialized into a temporary workspace and evaluated with pytest without mutating the developer checkout.
+
+A standalone CLI path is also available:
+
+```bash
+agentic-migrator sandbox-test candidate.py test_candidate.py --timeout 20
+```
+
+> `LocalSandbox` is a process-isolation reference boundary, **not a hardened hostile-code sandbox**. Untrusted code should additionally run inside a locked-down container, VM, seccomp profile or remote worker pool.
+
+### 5. Git isolation and patch boundaries
+
+`migrator/repository.py` provides a thin Git boundary with:
+
+- clean-checkout enforcement;
+- HEAD/branch checkpoints;
+- detached temporary worktrees;
+- binary diff / patch export;
+- patch validation/application;
+- destructive reset only through an explicit opt-in flag.
+
+A failed migration can therefore die inside a disposable worktree rather than leaving a developer checkout half-mutated.
+
+```bash
+agentic-migrator git-checkpoint . --require-clean
+agentic-migrator git-patch . --output artifacts/migration.patch
+```
+
+### 6. Auditable change plans and rollback
+
+The repository intentionally separates two responsibilities:
+
+- `migrator.gitops.ChangeSet` — an **in-memory preflight plan** for create/update/delete operations, unified diffs, SHA-256 before/after hashes and per-file rollback;
+- `migrator.workspace.MigrationWorkspace` — a **filesystem transaction layer** that snapshots files, applies an approved text plan, verifies post-change hashes and restores the original snapshot.
+
+Both boundaries reject attempts to escape the migration root. This keeps “what the agent proposes” separate from “what is actually written to disk.”
+
+### 7. Semantic API diff
+
+Passing tests is necessary but not always sufficient for a library migration. `migrator/semantic_diff.py` compares public function/class signatures before and after a transformation and reports:
+
+- added public symbols;
+- removed public symbols;
+- changed signatures;
+- whether the API delta is potentially breaking.
+
+```bash
+agentic-migrator semantic-diff before.py after.py --fail-on-breaking
+```
+
+This gives CI a lightweight compatibility gate in addition to behavior tests.
+
+### 8. LLM usage and enforceable budgets
+
+`migrator/cost.py` keeps an append-only JSONL usage ledger for optional LLM-assisted repair calls. A `BudgetPolicy` can reject a projected call **before it is recorded/executed** when it would exceed configured limits for:
+
+- number of calls;
+- input tokens;
+- output tokens;
+- estimated USD cost.
+
+This complements the engine's `max_attempts`: autonomy is bounded both by convergence attempts and by explicit LLM resource budgets.
+
+```bash
+agentic-migrator cost-summary --ledger artifacts/llm_usage.jsonl
+```
+
+### 9. Guarded test repair
+
+Test repair is treated as a separate authority domain from source repair. The guard layer rejects obvious success-redefinition patterns such as:
+
+- reducing the assertion count;
+- introducing unconditional `assert True`;
+- broad exception swallowing;
+- adding pytest skip directives.
+
+Accepted test changes retain a unified diff and are recorded in the migration trace.
+
+### 10. Migration observability
+
+`migrator/metrics.py` projects execution traces into CI/portfolio metrics including:
 
 | Metric | Why it matters |
 |---|---|
 | Pass rate | Overall migration convergence |
-| First-pass success | Effectiveness of deterministic memory |
-| LLM avoidance rate | How often the system succeeds without repair calls |
-| Learned-rule reuse | Whether successful repairs actually become reusable knowledge |
+| First-pass success | Effectiveness of deterministic knowledge |
+| LLM avoidance rate | How often repair calls are unnecessary |
+| Learned-rule reuse | Whether repair knowledge becomes reusable |
 | Average attempts | Convergence efficiency |
 | Rule usage | Which migration knowledge provides value |
-| Failure-kind distribution | Where migration effort is being spent |
-| Test-repair rate | How often stale harnesses are involved |
-| Regression failures | Whether candidate rules damage existing scenarios |
+| Failure-kind distribution | Where migration effort is spent |
+| Test-repair rate | How often validation infrastructure changes |
+| Regression failures | Whether candidate rules damage known scenarios |
 
-The synthetic benchmark can be run with:
+The synthetic benchmark writes machine-readable JSON and a Markdown summary:
 
 ```bash
 python examples/benchmark_report.py
 ```
 
-It writes machine-readable JSON and a Markdown summary under `artifacts/`.
-
-> Benchmark records shipped with the public example are synthetic demonstrations of the metric pipeline, not claimed production performance.
-
----
+Benchmark records in this public repository demonstrate the metric pipeline; they are not claimed production results.
 
 ## Failure model
 
-The engine distinguishes failure classes rather than treating every exception as the same prompt:
+The engine distinguishes failure categories rather than turning every exception into the same prompt:
 
 ```mermaid
 flowchart LR
@@ -228,104 +224,116 @@ flowchart LR
     F --> H[Test harness]
     F --> U[Unknown]
 
-    S --> P[Repair priority]
+    S --> P[Repair strategy]
     I --> P
     R --> P
     A --> P
-    H --> T[Test-repair policy]
+    H --> T[Separate test-repair policy]
     U --> B[Bounded fallback]
 ```
 
-A later, more local failure can represent progress. For example, moving from an import error to a specific assertion failure often means the migration has advanced far enough to execute the target behavior.
+A later, more local failure can count as progress: moving from a syntax/import failure to a specific assertion failure means the migrated code has advanced far enough to execute target behavior.
 
----
+## Quick start
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+
+agentic-migrator --help
+agentic-migrator scan . --format markdown
+pytest -q
+```
+
+Useful CLI commands:
+
+```text
+scan             dependency-aware migration planning
+transform        apply structural source-preserving migration rules
+semantic-diff    compare public API signatures
+sandbox-test     validate a candidate in the bounded temporary runner
+git-checkpoint   inspect the source repository checkpoint
+git-patch        export a reviewable migration patch
+cost-summary     summarize LLM usage and estimated cost
+```
 
 ## Repository layout
 
 ```text
 agentic-migrator/
 ├── migrator/
-│   ├── engine.py          # bounded migration loop
-│   ├── models.py          # structured domain objects
-│   ├── rules.py           # rule store + deterministic transforms
-│   ├── failures.py        # failure classification
-│   ├── llm.py             # structured synthesizer interface
+│   ├── engine.py          # bounded migration / repair loop
+│   ├── ast_rules.py       # AST-guided source-preserving transforms
+│   ├── project_scan.py    # dependency + migration-risk planning
+│   ├── rules.py           # deterministic and learned rule storage
+│   ├── governance.py      # quarantine / canary / promotion policy
+│   ├── sandbox.py         # bounded subprocess validation boundary
+│   ├── runners.py         # sandbox → MigrationEngine adapters
+│   ├── semantic_diff.py   # public API compatibility comparison
+│   ├── gitops.py          # in-memory ChangeSet + diffs / hashes
+│   ├── workspace.py       # filesystem snapshot / apply / verify / rollback
+│   ├── repository.py      # Git checkpoint / worktree / patch boundary
+│   ├── cost.py            # token/cost ledger + budget gates
 │   ├── metrics.py         # migration observability
-│   └── test_guard.py      # guarded harness repair
+│   ├── test_guard.py      # guarded harness repair
+│   ├── llm.py             # structured synthesizer interface
+│   ├── models.py          # domain objects and failure types
+│   └── cli.py             # command-line interface
 ├── rules/
 │   └── builtin.json
 ├── examples/
 │   ├── python_api_migration.py
 │   └── benchmark_report.py
-├── tests/
-│   └── test_engine.py
+├── tests/                 # engine, governance, sandbox, Git and migration tests
 ├── .github/workflows/
 │   └── ci.yml
-├── requirements-dev.txt
+├── Dockerfile
+├── pyproject.toml
 └── README.md
 ```
 
----
-
 ## Engineering decisions
 
-### LLM calls are deliberately late
+**LLM calls are deliberately late.** Reusable deterministic knowledge is tried first, reducing cost, nondeterminism and prompt sensitivity.
 
-The system tries reusable deterministic knowledge first. This reduces cost, nondeterminism and prompt sensitivity.
+**Source editing and source parsing are separate concerns.** The AST identifies what should change; byte-range edits preserve everything else.
 
-### The rule store is an explicit memory boundary
+**Agent memory is explicit.** Successful repairs become versionable rule artifacts with IDs and provenance rather than disappearing into chat history.
 
-Agent memory is not hidden in conversation history. Successful transformations are versionable artifacts with IDs and provenance.
+**Rule learning does not imply rule trust.** New rules accumulate evidence through quarantine/canary states before broad reuse.
 
-### Repair loops are bounded
+**Changing implementation and changing validation are different authorities.** Test repair has separate guardrails and audit evidence.
 
-`max_attempts` prevents non-converging autonomous loops from consuming unlimited time or tokens.
+**Repository mutation is transactional.** Proposed changes, filesystem application and Git integration are separate layers with hashes, manifests, worktrees and rollback paths.
 
-### Test repair is a separate authority domain
+**Autonomy has multiple budgets.** Attempts, allowed processes, runtime, output volume, LLM calls, tokens and estimated cost all have explicit boundaries.
 
-Changing implementation and changing validation are not equivalent operations. The guard layer makes that distinction explicit.
+## Interview walkthrough
 
-### Observability is part of the architecture
+A concise explanation of the project:
 
-If a migration system learns new rules, it should also make it possible to answer:
-
-- Which rules are being reused?
-- Which migrations still need the LLM?
-- Where does the process fail?
-- Did a learned rule improve future conversions?
-- Are test repairs becoming suspiciously common?
-
----
-
-## Example interview walkthrough
-
-A concise way to explain the project:
-
-> I built a migration loop where deterministic rules handle known transformations first. The converted candidate is validated against scenarios. If it fails, the failure is classified and an LLM is asked for a minimal reusable rule rather than a full rewrite. Candidate rules are regression-tested before they enter a persistent rule store, so successful fixes become deterministic behavior on future migrations. Repeated harness failures can trigger a separate guarded test-repair path, and the entire process is bounded and observable.
-
-That description maps directly to concrete code in this repository.
-
----
+> I built a deterministic-first code-migration system. It scans repository dependencies to plan migration order, applies AST-guided edits while preserving untouched source text, and validates candidates in a bounded temporary pytest runner. Known transformations stay deterministic. Unresolved failures can ask an LLM for a small reusable rule, but calls are budgeted and learned rules pass regression and governance gates before wider reuse. Repository changes are represented as hashed change sets, validated in isolated Git worktrees and can be rolled back from snapshots. I also compare public API signatures and collect migration/LLM-usage metrics, so the system is testable and auditable rather than a giant rewrite prompt.
 
 ## What this demonstrates
 
-- agentic AI;
-- code transformation;
-- test-driven migration;
-- self-improving rule systems;
-- LLM tool use;
-- structured outputs;
-- persistent agent memory;
-- bounded autonomous loops;
-- regression testing;
-- audit logging;
-- human-in-the-loop controls;
-- migration observability;
-- failure classification;
-- safe automation design.
+- agentic AI with bounded autonomy;
+- deterministic-first code migration;
+- AST-guided, source-preserving transformations;
+- dependency-aware repository planning;
+- sandboxed test execution boundaries;
+- Git worktree isolation and patch workflows;
+- semantic API compatibility checks;
+- create/update/delete manifests and rollback;
+- persistent rule memory and governance;
+- LLM call/token/cost budgeting;
+- guarded test repair;
+- regression testing and CI/CD;
+- observability and audit trails;
+- human-reviewable automation.
 
----
+## CI
 
-## Status
+GitHub Actions installs the package, runs Ruff and pytest, executes the synthetic migration benchmark, smoke-tests the CLI, builds the Docker image and checks the container entrypoint.
 
-The project is an actively developed public reference implementation. Current examples focus on small Python API migrations and synthetic validation scenarios; the architecture is intentionally structured so additional language adapters, AST transforms, containerized test runners and repository-scale orchestration can be added without changing the core control loop.
+The project is an actively developed reference implementation. Current adapters focus on Python migrations; stronger hostile-code isolation and additional language-specific migration adapters belong behind the same existing control boundaries rather than inside the LLM prompt.
