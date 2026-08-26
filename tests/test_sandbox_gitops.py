@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from migrator.gitops import MigrationWorkspace
+from migrator.gitops import ChangeSet
 from migrator.sandbox import LocalSandbox, SandboxViolation
 
 
@@ -52,19 +52,19 @@ def test_sandbox_caps_captured_output():
     assert "output truncated by sandbox" in result.stdout
 
 
-def test_workspace_tracks_create_update_delete_and_rollback():
-    workspace = MigrationWorkspace(
+def test_change_set_tracks_create_update_delete_and_rollback():
+    change_set = ChangeSet(
         {
             "pkg/update.py": "VALUE = 1\n",
             "pkg/delete.py": "OLD = True\n",
         }
     )
 
-    workspace.write("pkg/update.py", "VALUE = 2\n")
-    workspace.delete("pkg/delete.py")
-    workspace.create("pkg/create.py", "NEW = True\n")
+    change_set.write("pkg/update.py", "VALUE = 2\n")
+    change_set.delete("pkg/delete.py")
+    change_set.create("pkg/create.py", "NEW = True\n")
 
-    manifest = workspace.manifest()
+    manifest = change_set.manifest()
     assert manifest["changed_files"] == 3
     assert manifest["creates"] == 1
     assert manifest["updates"] == 1
@@ -75,29 +75,29 @@ def test_workspace_tracks_create_update_delete_and_rollback():
         "delete",
     }
 
-    workspace.rollback("pkg/create.py")
-    workspace.rollback("pkg/update.py")
-    assert workspace.read("pkg/update.py") == "VALUE = 1\n"
-    assert "pkg/create.py" not in workspace.paths()
+    change_set.rollback("pkg/create.py")
+    change_set.rollback("pkg/update.py")
+    assert change_set.read("pkg/update.py") == "VALUE = 1\n"
+    assert "pkg/create.py" not in change_set.paths()
 
-    workspace.rollback()
-    assert workspace.paths() == ("pkg/delete.py", "pkg/update.py")
+    change_set.rollback()
+    assert change_set.paths() == ("pkg/delete.py", "pkg/update.py")
 
 
-def test_workspace_materialize_applies_deletions_and_creations(tmp_path):
+def test_change_set_materialize_applies_deletions_and_creations(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     (root / "old.py").write_text("OLD = 1\n", encoding="utf-8")
 
-    workspace = MigrationWorkspace({"old.py": "OLD = 1\n"})
-    workspace.delete("old.py")
-    workspace.create("nested/new.py", "NEW = 2\n")
-    workspace.materialize(root)
+    change_set = ChangeSet({"old.py": "OLD = 1\n"})
+    change_set.delete("old.py")
+    change_set.create("nested/new.py", "NEW = 2\n")
+    change_set.materialize(root)
 
     assert not (root / "old.py").exists()
     assert (root / "nested/new.py").read_text(encoding="utf-8") == "NEW = 2\n"
 
 
-def test_workspace_rejects_unsafe_paths():
+def test_change_set_rejects_unsafe_paths():
     with pytest.raises(ValueError, match="unsafe migration path"):
-        MigrationWorkspace({"../escape.py": "bad"})
+        ChangeSet({"../escape.py": "bad"})
