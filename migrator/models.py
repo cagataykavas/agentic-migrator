@@ -28,6 +28,8 @@ class Rule:
 
 @dataclass
 class TestResult:
+    __test__ = False
+
     passed: bool
     name: str
     stdout: str = ""
