@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -119,7 +119,7 @@ class CostLedger:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_usd=self.calculate_cost(price, input_tokens, output_tokens),
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
             metadata=metadata or {},
         )
         with self.path.open("a", encoding="utf-8") as handle:
