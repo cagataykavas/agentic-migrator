@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -38,11 +38,8 @@ def build_dotted_expr(name: str, *, ctx: ast.expr_context | None = None) -> ast.
     node: ast.expr = ast.Name(id=parts[0], ctx=ast.Load())
     for part in parts[1:]:
         node = ast.Attribute(value=node, attr=part, ctx=ast.Load())
-    if ctx is not None:
-        if isinstance(node, ast.Name):
-            node.ctx = ctx
-        elif isinstance(node, ast.Attribute):
-            node.ctx = ctx
+    if ctx is not None and isinstance(node, (ast.Name, ast.Attribute)):
+        node.ctx = ctx
     return node
 
 
