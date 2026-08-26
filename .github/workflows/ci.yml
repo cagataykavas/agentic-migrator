@@ -25,6 +25,12 @@ jobs:
         run: python examples/benchmark_report.py
       - name: CLI smoke test
         run: agentic-migrator scan . --format json --output /tmp/migration-plan.json
+      - name: Sandboxed migration CLI smoke test
+        run: |
+          printf 'def add(a, b):\n    return a + b\n' > /tmp/candidate.py
+          printf 'from candidate import add\n\ndef test_add():\n    assert add(2, 3) == 5\n' > /tmp/test_candidate.py
+          agentic-migrator sandbox-test /tmp/candidate.py /tmp/test_candidate.py --timeout 10 --output /tmp/sandbox-result.json
+          python -c "import json; data=json.load(open('/tmp/sandbox-result.json')); assert data['passed']"
 
   container:
     runs-on: ubuntu-latest
