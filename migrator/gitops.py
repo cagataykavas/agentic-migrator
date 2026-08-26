@@ -56,7 +56,7 @@ class MigrationWorkspace:
         return destination
 
     @classmethod
-    def from_directory(cls, root: str | Path, pattern: str = "*.py") -> "MigrationWorkspace":
+    def from_directory(cls, root: str | Path, pattern: str = "*.py") -> MigrationWorkspace:
         root_path = Path(root).resolve()
         files = {
             path.relative_to(root_path).as_posix(): path.read_text(encoding="utf-8")
