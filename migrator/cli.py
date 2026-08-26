@@ -9,6 +9,8 @@ from .ast_rules import AttributeRewrite, ImportRewrite, KeywordRewrite, transfor
 from .cost import CostLedger
 from .project_scan import build_inventory, migration_plan, plan_as_markdown
 from .repository import GitRepository
+from .runners import PytestSandboxRunner
+from .sandbox import LocalSandbox
 from .semantic_diff import compare_public_api
 
 
@@ -84,6 +86,26 @@ def command_semantic_diff(args: argparse.Namespace) -> int:
     return 2 if diff.breaking and args.fail_on_breaking else 0
 
 
+def command_sandbox_test(args: argparse.Namespace) -> int:
+    candidate = Path(args.candidate).read_text(encoding="utf-8")
+    tests = Path(args.tests).read_text(encoding="utf-8")
+    sandbox = LocalSandbox(
+        timeout_seconds=args.timeout,
+        max_output_bytes=args.max_output_bytes,
+    )
+    runner = PytestSandboxRunner(sandbox)
+    result = runner(candidate, tests)
+    payload = {
+        "passed": result.passed,
+        "name": result.name,
+        "kind": result.kind.value,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+    _write_or_print(json.dumps(payload, indent=2), args.output)
+    return 0 if result.passed else 2
+
+
 def command_git_checkpoint(args: argparse.Namespace) -> int:
     repository = GitRepository(args.root)
     checkpoint = repository.checkpoint()
@@ -152,6 +174,17 @@ def build_parser() -> argparse.ArgumentParser:
     semantic.add_argument("--output")
     semantic.add_argument("--fail-on-breaking", action="store_true")
     semantic.set_defaults(handler=command_semantic_diff)
+
+    sandbox = subparsers.add_parser(
+        "sandbox-test",
+        help="run a candidate and pytest harness in the bounded temporary sandbox",
+    )
+    sandbox.add_argument("candidate")
+    sandbox.add_argument("tests")
+    sandbox.add_argument("--timeout", type=float, default=20.0)
+    sandbox.add_argument("--max-output-bytes", type=int, default=256_000)
+    sandbox.add_argument("--output")
+    sandbox.set_defaults(handler=command_sandbox_test)
 
     checkpoint = subparsers.add_parser("git-checkpoint", help="show the current Git migration checkpoint")
     checkpoint.add_argument("root", nargs="?", default=".")
