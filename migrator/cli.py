@@ -8,6 +8,7 @@ from pathlib import Path
 from .ast_rules import AttributeRewrite, ImportRewrite, KeywordRewrite, transform_source
 from .cost import CostLedger
 from .project_scan import build_inventory, migration_plan, plan_as_markdown
+from .repo_transform import build_repository_transform_plan
 from .repository import GitRepository
 from .runners import PytestSandboxRunner
 from .sandbox import LocalSandbox
@@ -16,10 +17,56 @@ from .semantic_diff import compare_public_api
 
 def _write_or_print(text: str, output: str | None) -> None:
     if output:
-        Path(output).write_text(text, encoding="utf-8")
-        print(f"wrote {output}")
+        path = Path(output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        print(f"wrote {path}")
     else:
         print(text)
+
+
+def _parse_structural_rules(
+    args: argparse.Namespace,
+) -> tuple[
+    tuple[ImportRewrite, ...],
+    tuple[KeywordRewrite, ...],
+    tuple[AttributeRewrite, ...],
+]:
+    imports = tuple(
+        ImportRewrite(old, new)
+        for old, new in (item.split("=", 1) for item in args.import_rewrite)
+    )
+    attributes = tuple(
+        AttributeRewrite(old, new)
+        for old, new in (item.split("=", 1) for item in args.attribute_rewrite)
+    )
+    keywords: list[KeywordRewrite] = []
+    for raw in args.keyword_rewrite:
+        function_name, mapping = raw.split(":", 1)
+        old_keyword, new_keyword = mapping.split("=", 1)
+        keywords.append(KeywordRewrite(function_name, old_keyword, new_keyword))
+    return imports, tuple(keywords), attributes
+
+
+def _add_structural_rule_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--import-rewrite",
+        action="append",
+        default=[],
+        metavar="OLD=NEW",
+    )
+    parser.add_argument(
+        "--attribute-rewrite",
+        action="append",
+        default=[],
+        metavar="OLD=NEW",
+    )
+    parser.add_argument(
+        "--keyword-rewrite",
+        action="append",
+        default=[],
+        metavar="FUNCTION:OLD=NEW",
+    )
 
 
 def command_scan(args: argparse.Namespace) -> int:
@@ -43,25 +90,12 @@ def command_scan(args: argparse.Namespace) -> int:
 def command_transform(args: argparse.Namespace) -> int:
     source_path = Path(args.source)
     source = source_path.read_text(encoding="utf-8")
-
-    imports = tuple(
-        ImportRewrite(old, new)
-        for old, new in (item.split("=", 1) for item in args.import_rewrite)
-    )
-    attributes = tuple(
-        AttributeRewrite(old, new)
-        for old, new in (item.split("=", 1) for item in args.attribute_rewrite)
-    )
-    keywords = []
-    for raw in args.keyword_rewrite:
-        function_name, mapping = raw.split(":", 1)
-        old_keyword, new_keyword = mapping.split("=", 1)
-        keywords.append(KeywordRewrite(function_name, old_keyword, new_keyword))
+    imports, keywords, attributes = _parse_structural_rules(args)
 
     transformed, applied = transform_source(
         source,
         import_rewrites=imports,
-        keyword_rewrites=tuple(keywords),
+        keyword_rewrites=keywords,
         attribute_rewrites=attributes,
     )
 
@@ -74,6 +108,46 @@ def command_transform(args: argparse.Namespace) -> int:
             print(f"  - {item}")
     else:
         print("no structural rules matched")
+    return 0
+
+
+def command_migrate_repo(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    repository = GitRepository(root)
+    repository.ensure_clean()
+    imports, keywords, attributes = _parse_structural_rules(args)
+
+    plan = build_repository_transform_plan(
+        root,
+        import_rewrites=imports,
+        keyword_rewrites=keywords,
+        attribute_rewrites=attributes,
+        high_risk_imports=tuple(args.high_risk_import),
+        max_risk=args.max_risk,
+    )
+
+    manifest_path = Path(args.manifest).resolve()
+    patch_path = Path(args.patch).resolve()
+
+    if plan.breaking_files and args.fail_on_breaking:
+        _write_or_print(json.dumps(plan.as_dict(), indent=2), str(manifest_path))
+        print(
+            "patch withheld because semantic API review found breaking files: "
+            + ", ".join(plan.breaking_files)
+        )
+        return 2
+
+    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    with repository.isolated_worktree() as worktree:
+        plan.changeset.materialize(worktree)
+        GitRepository(worktree).write_patch(patch_path)
+
+    _write_or_print(json.dumps(plan.as_dict(), indent=2), str(manifest_path))
+    print(
+        f"repository migration planned: changed={plan.changed_files} "
+        f"skipped={plan.skipped_files} breaking={len(plan.breaking_files)}"
+    )
+    print(f"wrote {patch_path}")
     return 0
 
 
@@ -145,25 +219,21 @@ def build_parser() -> argparse.ArgumentParser:
     transform = subparsers.add_parser("transform", help="apply structural AST migration rules")
     transform.add_argument("source")
     transform.add_argument("--output")
-    transform.add_argument(
-        "--import-rewrite",
-        action="append",
-        default=[],
-        metavar="OLD=NEW",
-    )
-    transform.add_argument(
-        "--attribute-rewrite",
-        action="append",
-        default=[],
-        metavar="OLD=NEW",
-    )
-    transform.add_argument(
-        "--keyword-rewrite",
-        action="append",
-        default=[],
-        metavar="FUNCTION:OLD=NEW",
-    )
+    _add_structural_rule_arguments(transform)
     transform.set_defaults(handler=command_transform)
+
+    migrate = subparsers.add_parser(
+        "migrate-repo",
+        help="plan repository transforms in dependency order and export an isolated Git patch",
+    )
+    migrate.add_argument("root", nargs="?", default=".")
+    migrate.add_argument("--high-risk-import", action="append", default=[])
+    migrate.add_argument("--max-risk", type=int, default=100)
+    migrate.add_argument("--manifest", default="artifacts/repository-migration.json")
+    migrate.add_argument("--patch", default="artifacts/repository-migration.patch")
+    migrate.add_argument("--fail-on-breaking", action="store_true")
+    _add_structural_rule_arguments(migrate)
+    migrate.set_defaults(handler=command_migrate_repo)
 
     semantic = subparsers.add_parser(
         "semantic-diff",
@@ -191,7 +261,10 @@ def build_parser() -> argparse.ArgumentParser:
     checkpoint.add_argument("--require-clean", action="store_true")
     checkpoint.set_defaults(handler=command_git_checkpoint)
 
-    patch = subparsers.add_parser("git-patch", help="export the current repository diff as a patch artifact")
+    patch = subparsers.add_parser(
+        "git-patch",
+        help="export the current repository diff as a patch artifact",
+    )
     patch.add_argument("root", nargs="?", default=".")
     patch.add_argument("--base", default="HEAD")
     patch.add_argument("--output", default="artifacts/migration.patch")
