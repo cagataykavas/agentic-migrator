@@ -2,7 +2,7 @@
 
 > **A test-driven, self-improving code-migration system that turns successful LLM repairs into reusable deterministic rules.**
 
-Agentic Migrator is a public reference architecture for modernizing code without handing an entire repository to an LLM and hoping for the best. It treats the LLM as a **bounded exception handler and rule synthesizer**, while deterministic transformations, isolated validation, rollback boundaries and governance remain explicit software components.
+Agentic Migrator is a public reference architecture for modernizing code without handing an entire repository to an LLM and hoping for the best. It treats the LLM as a **bounded exception handler and rule synthesizer**, while deterministic transformations, isolated validation, rollback boundaries, observability and governance remain explicit software components.
 
 All examples are synthetic. No proprietary source code, migration rules or internal test suites are included.
 
@@ -11,7 +11,11 @@ All examples are synthetic. No proprietary source code, migration rules or inter
 ```mermaid
 flowchart TD
     REPO[Repository] --> SCAN[Dependency + risk scan]
-    SCAN --> WT[Detached Git worktree]
+    SCAN --> PART{Execution lane}
+    PART -->|safe independent units| PAR[Bounded parallel workers]
+    PART -->|high risk| HUMAN[Human review lane]
+    PAR --> ADAPT[Language adapter boundary]
+    ADAPT --> WT[Detached Git worktree]
     WT --> RULES[Deterministic rule engine]
     MEMORY[(Governed rule memory)] --> RULES
     RULES --> EDIT[Source-preserving structural edits]
@@ -34,6 +38,10 @@ flowchart TD
     CLASSIFY --> HARNESS{Repeated harness failure?}
     HARNESS -- yes --> TESTFIX[Guarded test-repair proposal]
     TESTFIX --> TEST
+
+    TRACE[Structured tracing] -. spans/events .-> SCAN
+    TRACE -. spans/events .-> PAR
+    TRACE -. spans/events .-> TEST
 ```
 
 The core principle is simple:
@@ -111,8 +119,6 @@ Promotion uses validation success, cross-migration reuse, success rate and regre
 
 `migrator/runners.py` adapts this boundary to the migration engine through `PytestSandboxRunner`. Candidate code and its active test harness are materialized into a temporary workspace and evaluated with pytest without mutating the developer checkout.
 
-A standalone CLI path is also available:
-
 ```bash
 agentic-migrator sandbox-test candidate.py test_candidate.py --timeout 20
 ```
@@ -187,7 +193,7 @@ Test repair is treated as a separate authority domain from source repair. The gu
 
 Accepted test changes retain a unified diff and are recorded in the migration trace.
 
-### 10. Migration observability
+### 10. Migration metrics
 
 `migrator/metrics.py` projects execution traces into CI/portfolio metrics including:
 
@@ -210,6 +216,63 @@ python examples/benchmark_report.py
 ```
 
 Benchmark records in this public repository demonstrate the metric pipeline; they are not claimed production results.
+
+### 11. Structured tracing + optional OpenTelemetry bridge
+
+`migrator/tracing.py` adds nested spans, parent/child IDs, duration, attributes, events and error metadata. The dependency-free recorder can append JSONL traces as CI artifacts.
+
+```python
+from migrator.tracing import TraceRecorder
+
+recorder = TraceRecorder(output="artifacts/migration-trace.jsonl")
+with recorder.span("repository.migrate", files=12):
+    recorder.event("scan.complete", cycles=1)
+    with recorder.span("file.migrate", path="service.py"):
+        ...
+```
+
+`OpenTelemetryBridge` is an optional integration point: when OpenTelemetry is installed/configured it can mirror spans to the active tracer provider; otherwise the core project remains dependency-light. The repository deliberately does not relabel its local JSONL format as OpenTelemetry.
+
+### 12. Risk-aware parallel repository execution
+
+`migrator/parallel.py` provides bounded concurrent execution for independent migration units.
+
+- worker count is explicit;
+- units above an automatic risk ceiling are diverted to a review lane;
+- worker failures become structured results;
+- execution can finish in any order while returned results remain deterministically sorted;
+- summaries expose success/failure/review counts.
+
+```python
+from migrator.parallel import MigrationTask, ParallelMigrationExecutor
+
+executor = ParallelMigrationExecutor(migrate_one_file, max_workers=4)
+results, review_lane = executor.run([
+    MigrationTask("api.py", api_payload, risk_score=0.20),
+    MigrationTask("legacy_core.py", core_payload, risk_score=0.94),
+])
+```
+
+The high-risk unit is deferred rather than silently pushed through the same autonomous lane.
+
+### 13. Language adapter boundary
+
+`migrator/adapters.py` separates repository orchestration from language-specific source handling.
+
+The public registry currently includes:
+
+- Python validation through `ast.parse`;
+- lightweight Java structural validation;
+- lightweight JavaScript/TypeScript delimiter validation;
+- source normalization and language detection.
+
+These lightweight Java/JavaScript validators are **not claimed to be compilers**. Python remains the deepest public structural-transform implementation; additional real parser/compiler-backed language adapters can be mounted behind the same interface.
+
+For the complete design and runnable trace/parallel example, see `docs/observability_and_parallelism.md`.
+
+```bash
+python examples/parallel_trace_demo.py
+```
 
 ## Failure model
 
@@ -244,6 +307,7 @@ pip install -e ".[dev]"
 agentic-migrator --help
 agentic-migrator scan . --format markdown
 pytest -q
+python examples/parallel_trace_demo.py
 ```
 
 Useful CLI commands:
@@ -266,6 +330,9 @@ agentic-migrator/
 │   ├── engine.py          # bounded migration / repair loop
 │   ├── ast_rules.py       # AST-guided source-preserving transforms
 │   ├── project_scan.py    # dependency + migration-risk planning
+│   ├── adapters.py        # language-specific normalization / validation boundary
+│   ├── parallel.py        # risk-aware bounded concurrent execution
+│   ├── tracing.py         # JSONL tracing + optional OpenTelemetry bridge
 │   ├── rules.py           # deterministic and learned rule storage
 │   ├── governance.py      # quarantine / canary / promotion policy
 │   ├── sandbox.py         # bounded subprocess validation boundary
@@ -280,12 +347,15 @@ agentic-migrator/
 │   ├── llm.py             # structured synthesizer interface
 │   ├── models.py          # domain objects and failure types
 │   └── cli.py             # command-line interface
+├── docs/
+│   └── observability_and_parallelism.md
 ├── rules/
 │   └── builtin.json
 ├── examples/
-│   ├── python_api_migration.py
-│   └── benchmark_report.py
-├── tests/                 # engine, governance, sandbox, Git and migration tests
+│   ├── benchmark_report.py
+│   ├── parallel_trace_demo.py
+│   └── repository_migration_plan.py
+├── tests/                 # engine, governance, sandbox, adapters, tracing, Git tests
 ├── .github/workflows/
 │   └── ci.yml
 ├── Dockerfile
@@ -307,13 +377,17 @@ agentic-migrator/
 
 **Repository mutation is transactional.** Proposed changes, filesystem application and Git integration are separate layers with hashes, manifests, worktrees and rollback paths.
 
-**Autonomy has multiple budgets.** Attempts, allowed processes, runtime, output volume, LLM calls, tokens and estimated cost all have explicit boundaries.
+**Concurrency does not erase governance.** Parallel execution only applies to the automatic lane; higher-risk units remain reviewable and result reporting is deterministic.
+
+**Observability is not prompt logging.** Migration spans/events and LLM cost records are structured artifacts that can be inspected independently of model conversation text.
+
+**Autonomy has multiple budgets.** Attempts, allowed processes, runtime, output volume, concurrency, risk thresholds, LLM calls, tokens and estimated cost all have explicit boundaries.
 
 ## Interview walkthrough
 
 A concise explanation of the project:
 
-> I built a deterministic-first code-migration system. It scans repository dependencies to plan migration order, applies AST-guided edits while preserving untouched source text, and validates candidates in a bounded temporary pytest runner. Known transformations stay deterministic. Unresolved failures can ask an LLM for a small reusable rule, but calls are budgeted and learned rules pass regression and governance gates before wider reuse. Repository changes are represented as hashed change sets, validated in isolated Git worktrees and can be rolled back from snapshots. I also compare public API signatures and collect migration/LLM-usage metrics, so the system is testable and auditable rather than a giant rewrite prompt.
+> I built a deterministic-first code-migration system. It scans repository dependencies to plan migration order, partitions work by risk, and can validate independent units concurrently while keeping results deterministic. Python migrations use AST-guided edits that preserve untouched source text. Candidates are evaluated in bounded temporary runners and isolated Git worktrees. Known transformations stay deterministic; unresolved failures can ask an LLM for a small reusable rule, but calls are budgeted and learned rules pass regression and governance gates before wider reuse. Changes are represented as hashed change sets with rollback, public API signatures can be compared semantically, and migration runs emit metrics plus structured traces with an optional OpenTelemetry bridge.
 
 ## What this demonstrates
 
@@ -321,6 +395,9 @@ A concise explanation of the project:
 - deterministic-first code migration;
 - AST-guided, source-preserving transformations;
 - dependency-aware repository planning;
+- risk-aware parallel execution;
+- language-adapter architecture;
+- structured tracing and optional OpenTelemetry integration;
 - sandboxed test execution boundaries;
 - Git worktree isolation and patch workflows;
 - semantic API compatibility checks;
@@ -334,6 +411,6 @@ A concise explanation of the project:
 
 ## CI
 
-GitHub Actions installs the package, runs Ruff and pytest, executes the synthetic migration benchmark, smoke-tests the CLI, builds the Docker image and checks the container entrypoint.
+GitHub Actions installs the package, runs Ruff and pytest, executes the synthetic migration benchmark, runs the traceable parallel demo, smoke-tests the CLI and sandbox path, builds the Docker image and checks the container entrypoint.
 
-The project is an actively developed reference implementation. Current adapters focus on Python migrations; stronger hostile-code isolation and additional language-specific migration adapters belong behind the same existing control boundaries rather than inside the LLM prompt.
+The project is an actively developed reference implementation. Python currently has the deepest structural migration adapter; other language boundaries are intentionally explicit so stronger compiler/parser-backed adapters can be added without moving language semantics into the LLM prompt.
