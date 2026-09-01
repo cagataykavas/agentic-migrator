@@ -63,7 +63,9 @@ class ParallelMigrationExecutor(Generic[T, R]):
             (automatic if task.risk_score <= self.automatic_risk_ceiling else review).append(task)
         return automatic, review
 
-    def run(self, tasks: Iterable[MigrationTask[T]]) -> tuple[list[MigrationTaskResult[R]], list[MigrationTask[T]]]:
+    def run(
+        self, tasks: Iterable[MigrationTask[T]]
+    ) -> tuple[list[MigrationTaskResult[R]], list[MigrationTask[T]]]:
         automatic, review = self.partition(tasks)
         if not automatic:
             return [], sorted(review, key=lambda task: task.task_id)
@@ -81,7 +83,7 @@ class ParallelMigrationExecutor(Generic[T, R]):
                 duration_ms = (time.perf_counter_ns() - started) / 1_000_000
                 try:
                     value = future.result()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - worker failures are data, not fatal here.
                     results.append(
                         MigrationTaskResult(
                             task_id=task.task_id,
