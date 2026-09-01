@@ -111,9 +111,8 @@ class JavaScriptAdapter(MigrationAdapter):
                 quote = char
             elif char in pairs:
                 stack.append(char)
-            elif char in closing:
-                if not stack or stack.pop() != closing[char]:
-                    return ValidationResult(False, (f"unmatched delimiter: {char}",))
+            elif char in closing and (not stack or stack.pop() != closing[char]):
+                return ValidationResult(False, (f"unmatched delimiter: {char}",))
 
         diagnostics: list[str] = []
         if stack:
