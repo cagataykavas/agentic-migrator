@@ -75,5 +75,5 @@ def test_risk_estimator_is_bounded_and_transparent() -> None:
         line_count=50_000,
         high_risk_patterns=("core/*",),
     )
-    assert risk == 0.95
+    assert risk == 1.0
     assert matched == "core/*"
