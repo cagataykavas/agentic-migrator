@@ -22,17 +22,36 @@ jobs:
       - name: Pytest
         run: pytest -q
       - name: Synthetic benchmark
-        run: python examples/benchmark_report.py
+        run: python examples/benchmark_report.py > /tmp/benchmark-report.json
       - name: Traceable parallel migration demo
         run: python examples/parallel_trace_demo.py > /tmp/parallel-trace-demo.json
-      - name: CLI smoke test
+      - name: CLI scan smoke test
         run: agentic-migrator scan . --format json --output /tmp/migration-plan.json
+      - name: Repository preflight smoke test
+        run: |
+          agentic-migrator preflight . \
+            --workers 4 \
+            --trace-output /tmp/preflight-trace.jsonl \
+            --output /tmp/preflight-report.json \
+            --fail-on-invalid
       - name: Sandboxed migration CLI smoke test
         run: |
           printf 'def add(a, b):\n    return a + b\n' > /tmp/candidate.py
           printf 'from candidate import add\n\ndef test_add():\n    assert add(2, 3) == 5\n' > /tmp/test_candidate.py
           agentic-migrator sandbox-test /tmp/candidate.py /tmp/test_candidate.py --timeout 10 --output /tmp/sandbox-result.json
           python -c "import json; data=json.load(open('/tmp/sandbox-result.json')); assert data['passed']"
+      - name: Publish migration evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-control-plane-evidence
+          path: |
+            /tmp/benchmark-report.json
+            /tmp/parallel-trace-demo.json
+            /tmp/migration-plan.json
+            /tmp/preflight-report.json
+            /tmp/preflight-trace.jsonl
+            /tmp/sandbox-result.json
+          if-no-files-found: error
 
   container:
     runs-on: ubuntu-latest
