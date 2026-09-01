@@ -23,6 +23,8 @@ jobs:
         run: pytest -q
       - name: Synthetic benchmark
         run: python examples/benchmark_report.py
+      - name: Traceable parallel migration demo
+        run: python examples/parallel_trace_demo.py > /tmp/parallel-trace-demo.json
       - name: CLI smoke test
         run: agentic-migrator scan . --format json --output /tmp/migration-plan.json
       - name: Sandboxed migration CLI smoke test
