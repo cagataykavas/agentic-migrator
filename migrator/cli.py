@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .ast_rules import AttributeRewrite, ImportRewrite, KeywordRewrite, transform_source
 from .cost import CostLedger
+from .preflight import run_repository_preflight
 from .project_scan import build_inventory, migration_plan, plan_as_markdown
 from .repo_transform import build_repository_transform_plan
 from .repository import GitRepository
@@ -84,6 +85,23 @@ def command_scan(args: argparse.Namespace) -> int:
         "plan": [asdict(unit) for unit in plan],
     }
     _write_or_print(json.dumps(payload, indent=2), args.output)
+    return 0
+
+
+def command_preflight(args: argparse.Namespace) -> int:
+    report = run_repository_preflight(
+        args.root,
+        max_workers=args.workers,
+        automatic_risk_ceiling=args.automatic_risk_ceiling,
+        high_risk_patterns=tuple(args.high_risk_pattern),
+        trace_output=args.trace_output,
+    )
+    payload = report.as_dict()
+    _write_or_print(json.dumps(payload, indent=2), args.output)
+
+    invalid = [item for item in report.validated if not item.valid]
+    if args.fail_on_invalid and (invalid or report.failed_workers):
+        return 2
     return 0
 
 
@@ -205,7 +223,7 @@ def command_cost_summary(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agentic-migrator",
-        description="Analyze and migrate Python code with deterministic, testable rules.",
+        description="Analyze and migrate code with deterministic, testable control boundaries.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -215,6 +233,25 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--format", choices=("json", "markdown"), default="markdown")
     scan.add_argument("--output")
     scan.set_defaults(handler=command_scan)
+
+    preflight = subparsers.add_parser(
+        "preflight",
+        help="discover supported source files, split risk lanes and validate in parallel",
+    )
+    preflight.add_argument("root", nargs="?", default=".")
+    preflight.add_argument("--workers", type=int, default=4)
+    preflight.add_argument("--automatic-risk-ceiling", type=float, default=0.80)
+    preflight.add_argument(
+        "--high-risk-pattern",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="explicitly raise risk for matching repository paths, e.g. 'core/*'",
+    )
+    preflight.add_argument("--trace-output", default="artifacts/preflight-trace.jsonl")
+    preflight.add_argument("--output", default="artifacts/preflight-report.json")
+    preflight.add_argument("--fail-on-invalid", action="store_true")
+    preflight.set_defaults(handler=command_preflight)
 
     transform = subparsers.add_parser("transform", help="apply structural AST migration rules")
     transform.add_argument("source")
