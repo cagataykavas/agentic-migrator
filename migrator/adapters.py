@@ -122,9 +122,103 @@ class JavaScriptAdapter(MigrationAdapter):
         return ValidationResult(not diagnostics, tuple(diagnostics))
 
 
+class CAdapter(MigrationAdapter):
+    """Lightweight lexical preflight for C source/header files.
+
+    This is deliberately not advertised as a C parser. The adapter catches gross
+    delimiter/comment/string failures before a migration worker spends time on a
+    file; compiler-backed validation belongs in the sandbox execution stage.
+    """
+
+    language = "c"
+    suffixes = (".c", ".h")
+
+    def validate(self, source: str) -> ValidationResult:
+        stack: list[tuple[str, int]] = []
+        pairs = {"(": ")", "[": "]", "{": "}"}
+        closing = {value: key for key, value in pairs.items()}
+        diagnostics: list[str] = []
+        line = 1
+        index = 0
+        quote: str | None = None
+        escaped = False
+        in_line_comment = False
+        in_block_comment = False
+
+        while index < len(source):
+            char = source[index]
+            nxt = source[index + 1] if index + 1 < len(source) else ""
+
+            if char == "\n":
+                line += 1
+                in_line_comment = False
+                index += 1
+                continue
+            if in_line_comment:
+                index += 1
+                continue
+            if in_block_comment:
+                if char == "*" and nxt == "/":
+                    in_block_comment = False
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+                index += 1
+                continue
+
+            if char == "/" and nxt == "/":
+                in_line_comment = True
+                index += 2
+                continue
+            if char == "/" and nxt == "*":
+                in_block_comment = True
+                index += 2
+                continue
+            if char in {'"', "'"}:
+                quote = char
+                index += 1
+                continue
+            if char in pairs:
+                stack.append((char, line))
+            elif char in closing:
+                if not stack:
+                    diagnostics.append(f"unmatched closing {char!r} at line {line}")
+                    break
+                opening, opening_line = stack.pop()
+                if opening != closing[char]:
+                    diagnostics.append(
+                        f"mismatched delimiter {opening!r} at line {opening_line} "
+                        f"closed by {char!r} at line {line}"
+                    )
+                    break
+            index += 1
+
+        if quote is not None:
+            diagnostics.append(f"unterminated string/character literal near line {line}")
+        if in_block_comment:
+            diagnostics.append("unterminated block comment")
+        if stack:
+            opening, opening_line = stack[-1]
+            diagnostics.append(f"unclosed delimiter {opening!r} from line {opening_line}")
+        return ValidationResult(not diagnostics, tuple(diagnostics))
+
+
 class AdapterRegistry:
     def __init__(self, adapters: tuple[MigrationAdapter, ...] | None = None) -> None:
-        self.adapters = adapters or (PythonAdapter(), JavaAdapter(), JavaScriptAdapter())
+        self.adapters = adapters or (
+            PythonAdapter(),
+            JavaAdapter(),
+            JavaScriptAdapter(),
+            CAdapter(),
+        )
 
     def adapter_for(self, path: str | Path) -> MigrationAdapter:
         for adapter in self.adapters:
