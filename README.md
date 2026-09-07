@@ -1,10 +1,16 @@
 # Agentic Migrator
 
+[![CI](https://github.com/cagataykavas/agentic-migrator/actions/workflows/ci.yml/badge.svg)](https://github.com/cagataykavas/agentic-migrator/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Portfolio](https://img.shields.io/badge/case%20study-portfolio-74f0c7)](https://cagataykavas.github.io/#work)
+
 > **A test-driven, self-improving code-migration system that turns successful LLM repairs into reusable deterministic rules.**
 
 Agentic Migrator is a public reference architecture for modernizing code without handing an entire repository to an LLM and hoping for the best. It treats the LLM as a **bounded exception handler and rule synthesizer**, while deterministic transformations, isolated validation, rollback boundaries, observability and governance remain explicit software components.
 
 All examples are synthetic. No proprietary source code, migration rules or internal test suites are included.
+
+**Recruiter quick scan:** installable Python package · CLI · deterministic AST transforms · isolated Git worktrees · bounded subprocess execution · optional LLM boundary · governed rule lifecycle · structured traces · CI-tested examples.
 
 ## Architecture
 
