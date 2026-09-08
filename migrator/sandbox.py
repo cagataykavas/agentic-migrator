@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -95,6 +97,15 @@ class LocalSandbox:
         if executable not in self.policy.allowed_executables:
             allowed = ", ".join(self.policy.allowed_executables)
             raise SandboxViolation(f"executable {executable!r} is not allowed; allowed: {allowed}")
+        sibling = Path(sys.executable).with_name(executable)
+        resolved = sibling if sibling.is_file() else shutil.which(executable)
+        if resolved is None:
+            raise SandboxViolation(f"allowed executable {executable!r} is not installed")
+        if normalized[0] != executable and Path(normalized[0]).resolve() != Path(resolved).resolve():
+            raise SandboxViolation(
+                "executable path does not match the trusted allowlisted binary"
+            )
+        normalized = (str(resolved), *normalized[1:])
         return normalized
 
     def _environment(self, extra: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -131,8 +142,6 @@ class LocalSandbox:
         env: Mapping[str, str] | None = None,
     ) -> SandboxResult:
         argv = self._validate_command(command)
-        started = time.perf_counter()
-
         with tempfile.TemporaryDirectory(prefix="agentic-migrator-") as tmp:
             root = Path(tmp).resolve()
             for relative, content in (files or {}).items():
@@ -143,43 +152,58 @@ class LocalSandbox:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(content, encoding="utf-8")
 
-            try:
-                process = subprocess.run(
-                    argv,
-                    cwd=root,
-                    env=self._environment(env),
-                    text=True,
-                    capture_output=True,
-                    shell=False,
-                    timeout=self.policy.timeout_seconds,
-                    check=False,
-                )
-                stdout, stdout_truncated = self._truncate(process.stdout)
-                stderr, stderr_truncated = self._truncate(process.stderr)
-                return SandboxResult(
-                    command=argv,
-                    returncode=process.returncode,
-                    stdout=stdout,
-                    stderr=stderr,
-                    duration_seconds=time.perf_counter() - started,
-                    timed_out=False,
-                    output_truncated=stdout_truncated or stderr_truncated,
-                )
-            except subprocess.TimeoutExpired as exc:
-                stdout_value = exc.stdout or ""
-                stderr_value = exc.stderr or ""
-                if isinstance(stdout_value, bytes):
-                    stdout_value = stdout_value.decode("utf-8", errors="replace")
-                if isinstance(stderr_value, bytes):
-                    stderr_value = stderr_value.decode("utf-8", errors="replace")
-                stdout, stdout_truncated = self._truncate(stdout_value)
-                stderr, stderr_truncated = self._truncate(stderr_value)
-                return SandboxResult(
-                    command=argv,
-                    returncode=124,
-                    stdout=stdout,
-                    stderr=stderr,
-                    duration_seconds=time.perf_counter() - started,
-                    timed_out=True,
-                    output_truncated=stdout_truncated or stderr_truncated,
-                )
+            return self.run_in_directory(argv, root, env=env)
+
+    def run_in_directory(
+        self,
+        command: Sequence[str],
+        directory: str | Path,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> SandboxResult:
+        """Run a bounded command in an existing isolated repository directory."""
+        argv = self._validate_command(command)
+        root = Path(directory).resolve()
+        if not root.is_dir():
+            raise SandboxViolation(f"verification directory does not exist: {root}")
+        started = time.perf_counter()
+        try:
+            process = subprocess.run(
+                argv,
+                cwd=root,
+                env=self._environment(env),
+                text=True,
+                capture_output=True,
+                shell=False,
+                timeout=self.policy.timeout_seconds,
+                check=False,
+            )
+            stdout, stdout_truncated = self._truncate(process.stdout)
+            stderr, stderr_truncated = self._truncate(process.stderr)
+            return SandboxResult(
+                command=argv,
+                returncode=process.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                duration_seconds=time.perf_counter() - started,
+                timed_out=False,
+                output_truncated=stdout_truncated or stderr_truncated,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout_value = exc.stdout or ""
+            stderr_value = exc.stderr or ""
+            if isinstance(stdout_value, bytes):
+                stdout_value = stdout_value.decode("utf-8", errors="replace")
+            if isinstance(stderr_value, bytes):
+                stderr_value = stderr_value.decode("utf-8", errors="replace")
+            stdout, stdout_truncated = self._truncate(stdout_value)
+            stderr, stderr_truncated = self._truncate(stderr_value)
+            return SandboxResult(
+                command=argv,
+                returncode=124,
+                stdout=stdout,
+                stderr=stderr,
+                duration_seconds=time.perf_counter() - started,
+                timed_out=True,
+                output_truncated=stdout_truncated or stderr_truncated,
+            )

@@ -14,6 +14,7 @@ from .repository import GitRepository
 from .runners import PytestSandboxRunner
 from .sandbox import LocalSandbox
 from .semantic_diff import compare_public_api
+from .verification import RepositoryVerificationSuite
 
 
 def _write_or_print(text: str, output: str | None) -> None:
@@ -155,12 +156,63 @@ def command_migrate_repo(args: argparse.Namespace) -> int:
         )
         return 2
 
-    patch_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = plan.as_dict()
     with repository.isolated_worktree() as worktree:
         plan.changeset.materialize(worktree)
-        GitRepository(worktree).write_patch(patch_path)
+        if args.require_verification and not args.verify_command:
+            payload["verification"] = {
+                "passed": False,
+                "steps": [],
+                "reason": "verification is required but no commands were supplied",
+            }
+            payload["status"] = "verification_required"
+            _write_or_print(json.dumps(payload, indent=2), str(manifest_path))
+            print("patch withheld because verification is required")
+            return 2
+        if args.verify_command:
+            verification = RepositoryVerificationSuite(
+                args.verify_command,
+                timeout_seconds=args.verify_timeout,
+                max_output_bytes=args.max_verification_output,
+            ).run(worktree)
+            payload["verification"] = verification.as_dict()
+            if not verification.passed:
+                payload["status"] = "verification_failed"
+                _write_or_print(json.dumps(payload, indent=2), str(manifest_path))
+                print("patch withheld because repository verification failed")
+                return 2
+        else:
+            payload["verification"] = {
+                "passed": None,
+                "steps": [],
+                "reason": "no verification commands supplied",
+            }
 
-    _write_or_print(json.dumps(plan.as_dict(), indent=2), str(manifest_path))
+        if plan.changed_files == 0:
+            patch_path.parent.mkdir(parents=True, exist_ok=True)
+            patch_path.write_text("", encoding="utf-8")
+            payload["patch_validation"] = {
+                "applies_to_source_checkpoint": True,
+                "source_sha": repository.head_sha(),
+                "reason": "no changes proposed",
+            }
+            payload["status"] = "no_changes"
+            _write_or_print(json.dumps(payload, indent=2), str(manifest_path))
+            print("repository migration planned: no changes")
+            return 0
+
+        candidate_patch = worktree.parent / "candidate.patch"
+        GitRepository(worktree).write_patch(candidate_patch)
+        repository.apply_patch(candidate_patch, check_only=True)
+        patch_path.parent.mkdir(parents=True, exist_ok=True)
+        patch_path.write_text(candidate_patch.read_text(encoding="utf-8"), encoding="utf-8")
+        payload["patch_validation"] = {
+            "applies_to_source_checkpoint": True,
+            "source_sha": repository.head_sha(),
+        }
+        payload["status"] = "ready_for_review"
+
+    _write_or_print(json.dumps(payload, indent=2), str(manifest_path))
     print(
         f"repository migration planned: changed={plan.changed_files} "
         f"skipped={plan.skipped_files} breaking={len(plan.breaking_files)}"
@@ -269,6 +321,20 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--manifest", default="artifacts/repository-migration.json")
     migrate.add_argument("--patch", default="artifacts/repository-migration.patch")
     migrate.add_argument("--fail-on-breaking", action="store_true")
+    migrate.add_argument(
+        "--verify-command",
+        action="append",
+        default=[],
+        metavar="COMMAND",
+        help="shell-free command to run in the migrated worktree; may be repeated",
+    )
+    migrate.add_argument("--verify-timeout", type=float, default=120.0)
+    migrate.add_argument("--max-verification-output", type=int, default=256_000)
+    migrate.add_argument(
+        "--require-verification",
+        action="store_true",
+        help="withhold the patch unless at least one verification command passes",
+    )
     _add_structural_rule_arguments(migrate)
     migrate.set_defaults(handler=command_migrate_repo)
 

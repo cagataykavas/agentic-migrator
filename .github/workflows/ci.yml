@@ -21,6 +21,14 @@ jobs:
         run: ruff check migrator tests examples
       - name: Pytest
         run: pytest -q
+      - name: Build release artifacts
+        run: python -m build
+      - name: Verify wheel outside source tree
+        run: |
+          python -m venv /tmp/migrator-wheel
+          cd /tmp
+          /tmp/migrator-wheel/bin/pip install "$GITHUB_WORKSPACE"/dist/*.whl
+          /tmp/migrator-wheel/bin/agentic-migrator --help
       - name: Synthetic benchmark
         run: python examples/benchmark_report.py > /tmp/benchmark-report.json
       - name: Traceable parallel migration demo
@@ -34,6 +42,11 @@ jobs:
             --trace-output /tmp/preflight-trace.jsonl \
             --output /tmp/preflight-report.json \
             --fail-on-invalid
+      - name: Test-gated repository migration
+        run: |
+          python examples/test_gated_repository_demo.py \
+            --output /tmp/test-gated-demo \
+            > /tmp/test-gated-demo-summary.json
       - name: Sandboxed migration CLI smoke test
         run: |
           printf 'def add(a, b):\n    return a + b\n' > /tmp/candidate.py
@@ -51,6 +64,9 @@ jobs:
             /tmp/preflight-report.json
             /tmp/preflight-trace.jsonl
             /tmp/sandbox-result.json
+            /tmp/test-gated-demo-summary.json
+            /tmp/test-gated-demo/test-gated-migration.json
+            /tmp/test-gated-demo/test-gated-migration.patch
           if-no-files-found: error
 
   container:
