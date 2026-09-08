@@ -149,6 +149,25 @@ agentic-migrator git-checkpoint . --require-clean
 agentic-migrator git-patch . --output artifacts/migration.patch
 ```
 
+Repository transforms can also be gated by the migrated project's own checks:
+
+```bash
+agentic-migrator migrate-repo ./legacy-service \
+  --import-rewrite legacy_client=modern_client \
+  --verify-command "ruff check ." \
+  --verify-command "pytest -q" \
+  --require-verification \
+  --manifest artifacts/migration.json \
+  --patch artifacts/migration.patch
+```
+
+Each command is parsed into an argument vector and executed without a shell in the detached
+worktree. Executables are allowlisted, environment variables are stripped, output is bounded and
+each step has a timeout. The suite stops on the first failure and records command, exit code,
+duration, timeout state, stdout and stderr in the manifest. A failed or missing required gate
+withholds the patch. A passing patch is additionally checked against the original clean checkpoint
+with `git apply --check`; the source checkout remains unchanged throughout.
+
 ### 6. Auditable change plans and rollback
 
 The repository intentionally separates two responsibilities:
@@ -347,6 +366,7 @@ agentic-migrator/
 │   ├── gitops.py          # in-memory ChangeSet + diffs / hashes
 │   ├── workspace.py       # filesystem snapshot / apply / verify / rollback
 │   ├── repository.py      # Git checkpoint / worktree / patch boundary
+│   ├── verification.py    # ordered repository test/build gates and evidence
 │   ├── cost.py            # token/cost ledger + budget gates
 │   ├── metrics.py         # migration observability
 │   ├── test_guard.py      # guarded harness repair

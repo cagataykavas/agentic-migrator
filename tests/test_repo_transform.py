@@ -98,6 +98,9 @@ def test_migrate_repo_cli_exports_patch_without_mutating_checkout(tmp_path: Path
             str(patch),
             "--manifest",
             str(manifest),
+            "--verify-command",
+            "python -m compileall -q .",
+            "--require-verification",
         ]
     )
 
@@ -111,3 +114,97 @@ def test_migrate_repo_cli_exports_patch_without_mutating_checkout(tmp_path: Path
     assert payload["summary"]["changed_files"] == 1
     assert payload["summary"]["breaking_files"] == []
     assert payload["files"][0]["status"] == "changed"
+    assert payload["verification"]["passed"] is True
+    assert payload["patch_validation"]["applies_to_source_checkpoint"] is True
+
+
+def test_migrate_repo_withholds_patch_when_verification_fails(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("import legacy_client\n", encoding="utf-8")
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "ci@example.invalid")
+    _git(repo, "config", "user.name", "CI")
+    _git(repo, "add", "app.py")
+    _git(repo, "commit", "-m", "initial")
+    patch = tmp_path / "rejected.patch"
+    manifest = tmp_path / "rejected.json"
+
+    code = main(
+        [
+            "migrate-repo",
+            str(repo),
+            "--import-rewrite",
+            "legacy_client=modern_client",
+            "--verify-command",
+            'python -c "raise SystemExit(7)"',
+            "--patch",
+            str(patch),
+            "--manifest",
+            str(manifest),
+        ]
+    )
+
+    assert code == 2
+    assert not patch.exists()
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["status"] == "verification_failed"
+    assert payload["verification"]["steps"][0]["returncode"] == 7
+    assert (repo / "app.py").read_text(encoding="utf-8") == "import legacy_client\n"
+
+
+def test_migrate_repo_can_require_an_explicit_verification_gate(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("import legacy_client\n", encoding="utf-8")
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "ci@example.invalid")
+    _git(repo, "config", "user.name", "CI")
+    _git(repo, "add", "app.py")
+    _git(repo, "commit", "-m", "initial")
+    manifest = tmp_path / "required.json"
+
+    code = main(
+        [
+            "migrate-repo",
+            str(repo),
+            "--import-rewrite",
+            "legacy_client=modern_client",
+            "--require-verification",
+            "--manifest",
+            str(manifest),
+            "--patch",
+            str(tmp_path / "must-not-exist.patch"),
+        ]
+    )
+
+    assert code == 2
+    assert json.loads(manifest.read_text(encoding="utf-8"))["status"] == "verification_required"
+
+
+def test_migrate_repo_reports_noop_without_running_git_apply(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "ci@example.invalid")
+    _git(repo, "config", "user.name", "CI")
+    _git(repo, "add", "app.py")
+    _git(repo, "commit", "-m", "initial")
+    patch = tmp_path / "empty.patch"
+    manifest = tmp_path / "noop.json"
+
+    code = main(
+        [
+            "migrate-repo",
+            str(repo),
+            "--manifest",
+            str(manifest),
+            "--patch",
+            str(patch),
+        ]
+    )
+
+    assert code == 0
+    assert patch.read_text(encoding="utf-8") == ""
+    assert json.loads(manifest.read_text(encoding="utf-8"))["status"] == "no_changes"
