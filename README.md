@@ -218,6 +218,23 @@ Test repair is treated as a separate authority domain from source repair. The gu
 
 Accepted test changes retain a unified diff and are recorded in the migration trace.
 
+
+### Repair proposal admission policy
+
+`migrator/proposal_policy.py` evaluates an agent-generated `ProposedChange` set before
+workspace mutation. The server-owned policy constrains:
+
+- total files and added/removed lines;
+- create/update/delete authority;
+- protected paths such as CI workflows, Git metadata, environment files and secrets;
+- test-file mutation as a separate opt-in authority;
+- allowed repository roots;
+- duplicate, absolute and path-traversal targets.
+
+Every decision returns deterministic per-file evidence and machine-readable reasons. This
+is an admission boundary, not a semantic correctness proof: an accepted proposal must still
+pass sandbox verification, semantic API comparison and repository-specific tests.
+
 ### 10. Migration metrics
 
 `migrator/metrics.py` projects execution traces into CI/portfolio metrics including:
