@@ -44,3 +44,5 @@ class MigrationTrace:
     learned_rules: list[str] = field(default_factory=list)
     test_repairs: list[str] = field(default_factory=list)
     failures: list[dict[str, Any]] = field(default_factory=list)
+    convergence_states: list[dict[str, Any]] = field(default_factory=list)
+    termination_reason: str | None = None

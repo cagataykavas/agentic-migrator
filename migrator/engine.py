@@ -3,12 +3,22 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable
 
+from .convergence import ConvergencePolicy, RepairConvergenceGuard
 from .llm import RepairContext, RuleSynthesizer
 from .models import MigrationTrace, TestResult
 from .rules import RuleStore, apply_rules
 from .test_guard import unified_diff, validate_test_repair
 
 TestRunner = Callable[[str, str], TestResult]
+
+
+class MigrationConvergenceError(RuntimeError):
+    """Raised with structured evidence when the repair loop stops making progress."""
+
+    def __init__(self, reason: str, trace: MigrationTrace) -> None:
+        self.reason = reason
+        self.trace = trace
+        super().__init__(f"migration stopped: {reason} after {trace.attempts} attempts")
 
 
 class MigrationEngine:
@@ -20,21 +30,28 @@ class MigrationEngine:
         *,
         max_attempts: int = 6,
         repeated_test_failure_threshold: int = 3,
+        convergence_policy: ConvergencePolicy | None = None,
     ) -> None:
         self.rule_store = rule_store
         self.synthesizer = synthesizer
         self.test_runner = test_runner
         self.max_attempts = max_attempts
         self.repeated_test_failure_threshold = repeated_test_failure_threshold
+        self.convergence_policy = convergence_policy or ConvergencePolicy(
+            max_state_occurrences=max(2, repeated_test_failure_threshold),
+            max_unique_states=max_attempts,
+        )
 
     def migrate(self, source: str, test_source: str) -> tuple[str, str, MigrationTrace]:
         trace = MigrationTrace()
         active_test_source = test_source
         failure_signatures: Counter[str] = Counter()
+        convergence = RepairConvergenceGuard(self.convergence_policy)
 
         for attempt in range(1, self.max_attempts + 1):
             trace.attempts = attempt
-            candidate, applied = apply_rules(source, self.rule_store.load())
+            active_rules = self.rule_store.load()
+            candidate, applied = apply_rules(source, active_rules)
             trace.applied_rules.extend(rule_id for rule_id in applied if rule_id not in trace.applied_rules)
 
             result = self.test_runner(candidate, active_test_source)
@@ -49,12 +66,20 @@ class MigrationEngine:
                 "kind": result.kind.value,
                 "stderr": result.stderr,
             })
+            convergence_state = convergence.observe(
+                attempt=attempt,
+                candidate=candidate,
+                test_source=active_test_source,
+                test_result=result,
+                active_rule_ids=tuple(rule.id for rule in active_rules),
+            )
+            trace.convergence_states.append(convergence_state.to_dict())
 
             context = RepairContext(
                 source=source,
                 candidate=candidate,
                 test_result=result,
-                active_rule_ids=[rule.id for rule in self.rule_store.load()],
+                active_rule_ids=[rule.id for rule in active_rules],
             )
 
             proposed_rule = self.synthesizer.propose_rule(context)
@@ -83,7 +108,12 @@ class MigrationEngine:
                             continue
                     trace.failures.append({"attempt": attempt, "test_repair_rejected": reason})
 
-        raise RuntimeError(f"migration did not converge after {self.max_attempts} attempts")
+            if convergence_state.stalled:
+                trace.termination_reason = convergence_state.reason
+                raise MigrationConvergenceError(convergence_state.reason or "stalled", trace)
+
+        trace.termination_reason = "attempt_budget_exhausted"
+        raise MigrationConvergenceError(trace.termination_reason, trace)
 
     @staticmethod
     def _improved(before: TestResult, after: TestResult) -> bool:
