@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import subprocess
@@ -9,6 +10,8 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from ._output_capture import capture_process
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,19 @@ class LocalSandbox:
         allowed_executables: Sequence[str] | None = None,
         max_output_bytes: int = 256_000,
     ) -> None:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be positive and finite")
+        if (
+            isinstance(max_output_bytes, bool)
+            or not isinstance(max_output_bytes, int)
+            or max_output_bytes < 1
+        ):
+            raise ValueError("max_output_bytes must be a positive integer")
         defaults = SandboxPolicy()
         self.policy = SandboxPolicy(
             timeout_seconds=timeout_seconds,
@@ -101,10 +117,11 @@ class LocalSandbox:
         resolved = sibling if sibling.is_file() else shutil.which(executable)
         if resolved is None:
             raise SandboxViolation(f"allowed executable {executable!r} is not installed")
-        if normalized[0] != executable and Path(normalized[0]).resolve() != Path(resolved).resolve():
-            raise SandboxViolation(
-                "executable path does not match the trusted allowlisted binary"
-            )
+        if (
+            normalized[0] != executable
+            and Path(normalized[0]).resolve() != Path(resolved).resolve()
+        ):
+            raise SandboxViolation("executable path does not match the trusted allowlisted binary")
         normalized = (str(resolved), *normalized[1:])
         return normalized
 
@@ -126,13 +143,6 @@ class LocalSandbox:
                 )
             env.update({str(key): str(value) for key, value in extra.items()})
         return env
-
-    def _truncate(self, text: str) -> tuple[str, bool]:
-        encoded = text.encode("utf-8", errors="replace")
-        if len(encoded) <= self.policy.max_output_bytes:
-            return text, False
-        clipped = encoded[: self.policy.max_output_bytes].decode("utf-8", errors="replace")
-        return clipped + "\n...[output truncated by sandbox]", True
 
     def run(
         self,
@@ -167,43 +177,27 @@ class LocalSandbox:
         if not root.is_dir():
             raise SandboxViolation(f"verification directory does not exist: {root}")
         started = time.perf_counter()
-        try:
-            process = subprocess.run(
-                argv,
-                cwd=root,
-                env=self._environment(env),
-                text=True,
-                capture_output=True,
-                shell=False,
-                timeout=self.policy.timeout_seconds,
-                check=False,
-            )
-            stdout, stdout_truncated = self._truncate(process.stdout)
-            stderr, stderr_truncated = self._truncate(process.stderr)
-            return SandboxResult(
-                command=argv,
-                returncode=process.returncode,
-                stdout=stdout,
-                stderr=stderr,
-                duration_seconds=time.perf_counter() - started,
-                timed_out=False,
-                output_truncated=stdout_truncated or stderr_truncated,
-            )
-        except subprocess.TimeoutExpired as exc:
-            stdout_value = exc.stdout or ""
-            stderr_value = exc.stderr or ""
-            if isinstance(stdout_value, bytes):
-                stdout_value = stdout_value.decode("utf-8", errors="replace")
-            if isinstance(stderr_value, bytes):
-                stderr_value = stderr_value.decode("utf-8", errors="replace")
-            stdout, stdout_truncated = self._truncate(stdout_value)
-            stderr, stderr_truncated = self._truncate(stderr_value)
-            return SandboxResult(
-                command=argv,
-                returncode=124,
-                stdout=stdout,
-                stderr=stderr,
-                duration_seconds=time.perf_counter() - started,
-                timed_out=True,
-                output_truncated=stdout_truncated or stderr_truncated,
-            )
+        process = subprocess.Popen(
+            argv,
+            cwd=root,
+            env=self._environment(env),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            shell=False,
+            start_new_session=os.name == "posix",
+        )
+        returncode, stdout, stderr, timed_out, truncated = capture_process(
+            process,
+            timeout_seconds=self.policy.timeout_seconds,
+            max_output_bytes=self.policy.max_output_bytes,
+        )
+        return SandboxResult(
+            command=argv,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+            duration_seconds=time.perf_counter() - started,
+            timed_out=timed_out,
+            output_truncated=truncated,
+        )
