@@ -121,7 +121,22 @@ Promotion uses validation success, cross-migration reuse, success rate and regre
 - absolute/parent-path rejection for materialized files;
 - temporary working directory;
 - execution timeout;
-- captured-output byte limit.
+- streaming captured-output byte limit per stdout/stderr stream.
+
+Stdout and stderr are drained concurrently while retaining only the first
+`max_output_bytes` raw bytes **per stream**, rather than capturing the complete
+output and truncating afterward. Truncated evidence remains explicitly marked;
+the subprocess exit status still determines test success. Output beyond the
+retained prefix is discarded, not written to an unbounded temporary log.
+UTF-8 decoding uses replacement for invalid or cut code points; the fixed
+truncation marker and decoded string overhead are outside the raw-byte budget.
+
+The timeout includes pipe closure as well as direct-child completion. On POSIX,
+validation starts in a new session and timeout kills its process group, including
+ordinary children that inherited output pipes. On other platforms only the direct
+child is terminated. Descendants that deliberately escape the session remain
+outside this local boundary; use OS/container isolation for hostile code. The
+capture budget does not limit child memory, total emitted bytes, CPU or disk use.
 
 `migrator/runners.py` adapts this boundary to the migration engine through `PytestSandboxRunner`. Candidate code and its active test harness are materialized into a temporary workspace and evaluated with pytest without mutating the developer checkout.
 
