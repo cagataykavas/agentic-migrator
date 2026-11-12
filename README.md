@@ -111,6 +111,11 @@ quarantined → canary → promoted
 
 Promotion uses validation success, cross-migration reuse, success rate and regression evidence. A previously promoted rule can be quarantined again if regression evidence appears.
 
+Accepted rules are persisted through an atomic, lock-guarded `RuleStore`. This prevents parallel
+workers from losing one another's read-modify-write updates and prevents an interrupted save from
+exposing a partial JSON snapshot. See [concurrent rule memory](docs/concurrent_rule_memory.md) for
+the local-store guarantees and multi-host limitation.
+
 ### 4. Bounded sandbox validation
 
 `migrator/sandbox.py` provides a bounded local subprocess boundary for migration validation:
