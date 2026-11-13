@@ -14,6 +14,7 @@ from .repository import GitRepository
 from .runners import PytestSandboxRunner
 from .sandbox import LocalSandbox
 from .semantic_diff import compare_public_api
+from .trace_audit import TraceEvidenceError, audit_trace
 from .verification import RepositoryVerificationSuite
 
 
@@ -272,6 +273,25 @@ def command_cost_summary(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_trace_audit(args: argparse.Namespace) -> int:
+    try:
+        report = audit_trace(
+            args.trace,
+            required_span_names=tuple(args.require_span),
+        ).as_dict()
+    except TraceEvidenceError as exc:
+        report = {
+            "ok": False,
+            "trace_id": None,
+            "spans": 0,
+            "roots": 0,
+            "error_spans": 0,
+            "issues": [{"code": "input.invalid", "message": str(exc), "span_id": None}],
+        }
+    _write_or_print(json.dumps(report, indent=2, sort_keys=True), args.output)
+    return 0 if report["ok"] else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agentic-migrator",
@@ -376,6 +396,21 @@ def build_parser() -> argparse.ArgumentParser:
     cost = subparsers.add_parser("cost-summary", help="summarize optional LLM token/cost usage")
     cost.add_argument("--ledger", default="artifacts/llm_usage.jsonl")
     cost.set_defaults(handler=command_cost_summary)
+
+    trace_audit = subparsers.add_parser(
+        "trace-audit",
+        help="fail closed on malformed or structurally inconsistent trace evidence",
+    )
+    trace_audit.add_argument("trace", help="TraceRecorder JSONL artifact")
+    trace_audit.add_argument(
+        "--require-span",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="required control-plane span name; may be repeated",
+    )
+    trace_audit.add_argument("--output")
+    trace_audit.set_defaults(handler=command_trace_audit)
     return parser
 
 
