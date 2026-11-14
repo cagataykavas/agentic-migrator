@@ -201,7 +201,7 @@ This is a guardrail, not a claim of full semantic equivalence.
 
 ## 9. LLM cost / token accounting
 
-`migrator/cost.py` provides a provider-agnostic append-only JSONL ledger for optional repair calls. A budget policy can block projected use before a call would exceed configured:
+`migrator/cost.py` provides a provider-agnostic, bounded JSONL ledger for optional repair calls. Budget admission and canonical append share one exclusive file lock, so parallel agents cannot authorize against the same stale balance. The ledger is validated before mutation, flushed with `fsync`, and summarized with an exact SHA-256 commitment. A budget policy can block projected use before a call would exceed configured:
 
 - call count;
 - input tokens;

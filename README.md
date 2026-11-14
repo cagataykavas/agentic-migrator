@@ -194,7 +194,9 @@ This gives CI a lightweight compatibility gate in addition to behavior tests.
 
 ### 8. LLM usage and enforceable budgets
 
-`migrator/cost.py` keeps an append-only JSONL usage ledger for optional LLM-assisted repair calls. A `BudgetPolicy` can reject a projected call **before it is recorded/executed** when it would exceed configured limits for:
+`migrator/cost.py` keeps a bounded JSONL usage ledger for optional LLM-assisted repair calls. Each writer takes an exclusive POSIX file lock, validates the complete existing ledger, re-checks the budget inside the same critical section, appends one canonical event and calls `fsync`. Concurrent agents therefore cannot both authorize against the same stale balance. Corrupt, truncated, duplicate-field, non-finite, oversized and symlinked ledgers fail closed before mutation.
+
+A `BudgetPolicy` can reject a projected call **before it is recorded/executed** when it would exceed configured limits for:
 
 - number of calls;
 - input tokens;
@@ -206,6 +208,8 @@ This complements the engine's `max_attempts`: autonomy is bounded both by conver
 ```bash
 agentic-migrator cost-summary --ledger artifacts/llm_usage.jsonl
 ```
+
+The summary includes a SHA-256 commitment and byte count for the exact locked ledger snapshot; it never includes prompts or model responses. Exit code `2` distinguishes invalid accounting evidence from a valid empty ledger. Locking requires a local POSIX filesystem; the ledger is not a substitute for a transactional database or a distributed quota service across hosts.
 
 ### 9. Guarded test repair
 
@@ -367,7 +371,7 @@ agentic-migrator/
 │   ├── workspace.py       # filesystem snapshot / apply / verify / rollback
 │   ├── repository.py      # Git checkpoint / worktree / patch boundary
 │   ├── verification.py    # ordered repository test/build gates and evidence
-│   ├── cost.py            # token/cost ledger + budget gates
+│   ├── cost.py            # locked token/cost ledger + atomic budget admission
 │   ├── metrics.py         # migration observability
 │   ├── test_guard.py      # guarded harness repair
 │   ├── llm.py             # structured synthesizer interface
