@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentic-migrator"
-version = "0.3.0"
+version = "0.4.0"
 description = "Test-driven, rule-learning code migration platform with guarded LLM repair loops"
 readme = "README.md"
 requires-python = ">=3.11"

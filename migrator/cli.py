@@ -6,7 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .ast_rules import AttributeRewrite, ImportRewrite, KeywordRewrite, transform_source
-from .cost import CostLedger
+from .cost import CostLedger, LedgerIntegrityError
 from .preflight import run_repository_preflight
 from .project_scan import build_inventory, migration_plan, plan_as_markdown
 from .repo_transform import build_repository_transform_plan
@@ -268,7 +268,12 @@ def command_git_patch(args: argparse.Namespace) -> int:
 
 def command_cost_summary(args: argparse.Namespace) -> int:
     ledger = CostLedger(args.ledger)
-    print(json.dumps(ledger.summary(), indent=2))
+    try:
+        summary = ledger.summary()
+    except LedgerIntegrityError as exc:
+        print(json.dumps({"valid": False, "error": str(exc)}, indent=2))
+        return 2
+    print(json.dumps({"valid": True, **summary}, indent=2))
     return 0
 
 
