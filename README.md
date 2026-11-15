@@ -207,6 +207,19 @@ This complements the engine's `max_attempts`: autonomy is bounded both by conver
 agentic-migrator cost-summary --ledger artifacts/llm_usage.jsonl
 ```
 
+Before a failed migration reaches the synthesizer, `migrator.context_policy` applies a
+server-owned egress boundary to the complete repair context. Source, candidate, diagnostics and
+active-rule identifiers have independent UTF-8 byte/count budgets. High-confidence private-key,
+bearer-token, quoted credential-assignment and credential-bearing URI markers reject the context
+instead of redacting and forwarding it. Accepted and rejected decisions carry a deterministic
+SHA-256 evidence identity bound to the content digests and active policy without echoing the
+underlying content.
+
+The built-in patterns are deliberately conservative: this prevents several common accidental
+disclosures but is not a general secret detector or data-loss-prevention system. Production
+integrations should also classify repository sensitivity, minimize source excerpts before this
+gate, and apply provider-side retention and regional controls.
+
 ### 9. Guarded test repair
 
 Test repair is treated as a separate authority domain from source repair. The guard layer rejects obvious success-redefinition patterns such as:
