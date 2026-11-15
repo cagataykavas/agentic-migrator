@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable
 
+from .context_policy import RepairContextPolicy, evaluate_repair_context
 from .llm import RepairContext, RuleSynthesizer
 from .models import MigrationTrace, TestResult
 from .rules import RuleStore, apply_rules
@@ -20,12 +21,14 @@ class MigrationEngine:
         *,
         max_attempts: int = 6,
         repeated_test_failure_threshold: int = 3,
+        repair_context_policy: RepairContextPolicy | None = None,
     ) -> None:
         self.rule_store = rule_store
         self.synthesizer = synthesizer
         self.test_runner = test_runner
         self.max_attempts = max_attempts
         self.repeated_test_failure_threshold = repeated_test_failure_threshold
+        self.repair_context_policy = repair_context_policy or RepairContextPolicy()
 
     def migrate(self, source: str, test_source: str) -> tuple[str, str, MigrationTrace]:
         trace = MigrationTrace()
@@ -50,11 +53,31 @@ class MigrationEngine:
                 "stderr": result.stderr,
             })
 
+            active_rule_ids = [rule.id for rule in self.rule_store.load()]
+            context_decision = evaluate_repair_context(
+                source=source,
+                candidate=candidate,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                active_rule_ids=active_rule_ids,
+                policy=self.repair_context_policy,
+            )
+            if not context_decision.accepted:
+                trace.failures.append(
+                    {
+                        "attempt": attempt,
+                        "repair_context_rejected": list(context_decision.reasons),
+                        "evidence_sha256": context_decision.evidence_sha256,
+                    }
+                )
+                reason_codes = ",".join(context_decision.reasons)
+                raise RuntimeError(f"repair context rejected: {reason_codes}")
+
             context = RepairContext(
                 source=source,
                 candidate=candidate,
                 test_result=result,
-                active_rule_ids=[rule.id for rule in self.rule_store.load()],
+                active_rule_ids=active_rule_ids,
             )
 
             proposed_rule = self.synthesizer.propose_rule(context)
